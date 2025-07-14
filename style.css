@@ -1,26 +1,29 @@
 /* Define CSS Variables from JSON branding */
 :root {
-    --primary-color: #013466; /* Dark blue from JSON palette */
-    --others-color: #ec7700; /* Orange from JSON palette */
-    --error-color: #E91C27;
-    --null-color: #CCCCCC;
-    --title-color: #013466; /* Dark blue */
-    --subtitle-color: #013466; /* Dark blue */
-    --text-color: #363636;
-    --footer-color: #073869;
-    --background-color: #ffffff;
-    --axis-major-color: #ccd5da;
-    --axis-minor-color: #ccd5da;
+    --primary-color: #013466; /* Dark blue from JSON dataColors primaryColor */
+    --others-color: #ec7700; /* Orange from JSON dataColors othersColor */
+    --error-color: #E91C27; /* From JSON dataColors errorColor */
+    --null-color: #CCCCCC; /* From JSON dataColors nullColor */
+    
+    /* Text and background colors from _variables and object definitions */
+    --title-color: #073869; /* From JSON _variables @TitleColor */
+    --subtitle-color: #073869; /* From JSON _variables @SubtitleColor */
+    --text-color: #363636; /* From JSON _variables @TextColor */
+    --footer-color: #073869; /* From JSON _variables @FooterColor */
+    --background-color: #ffffff; /* From JSON _variables @BackgroundColor */
+    --axis-major-color: #ccd5da; /* From JSON _variables @AxisMajorColor */
+    --axis-minor-color: #ccd5da; /* From JSON _variables @AxisMinorColor */
 
-    --title-size: 16px;
-    --subtitle-size: 12px;
-    --text-size: 12px;
-    --footer-size: 10px;
+    /* Font sizes from _variables */
+    --title-size: 16px; /* From JSON _variables @TitleSize */
+    --subtitle-size: 12px; /* From JSON _variables @SubtitleSize */
+    --text-size: 12px; /* From JSON _variables @TextSize */
+    --footer-size: 10px; /* From JSON _variables @FooterSize */
 }
 
 body {
     font-family: 'Inter', sans-serif;
-    background-color: #f2f2f2 !important; /* Applied from .qvt-sheet */
+    background-color: #f2f2f2 !important; /* Applied from .qvt-sheet, not explicitly in theme.json */
     padding: 1rem; /* p-4 */
     color: var(--text-color);
     font-size: var(--text-size);
@@ -37,7 +40,7 @@ body {
 /* Styling for input/select/textarea elements */
 input[type="text"], input[type="number"], input[type="email"], input[type="tel"], select, textarea {
     border-width: 1px;
-    border-color: var(--axis-major-color); /* border-gray-300 */
+    border-color: var(--axis-major-color); /* border-gray-300, using axis-major-color from theme.json */
     border-radius: 0.375rem; /* rounded-md */
     padding: 0.5rem; /* p-2 */
     box-shadow: 0 1px 2px 0 rgba(0, 0, 0, 0.05); /* shadow-sm */
@@ -76,7 +79,7 @@ input[type="text"]:focus, input[type="number"]:focus, input[type="email"]:focus,
     background-color: #012a52;
 }
 .btn-orange { /* Used for Add Report - now orange */
-    background-color: var(--others-color); /* Changed to orange */
+    background-color: var(--others-color); /* Changed to orange, based on othersColor */
     color: #ffffff;
 }
 .btn-orange:hover {
@@ -120,22 +123,26 @@ h3 {
     font-size: var(--subtitle-size); /* Using subtitle size for h3 as well */
 }
 .bg-blue-50 { /* Add Accounts section background */
-    background-color: #e0f2fe; /* Light blue, similar to primary palette */
+    /* Using a shade of blue from the 'ODW 1' scale in theme.json, which is #e5eaee for light blue */
+    background-color: #e5eaee;
 }
 .border-blue-200 { /* Add Accounts section border */
-    border-color: #bfdbfe; /* Light blue border */
+    /* Using a slightly darker shade of blue from the 'ODW 1' scale, #b2c0ce */
+    border-color: #b2c0ce;
 }
 .bg-orange-50 { /* Add Report section background - now light orange */
-    background-color: #fff7ed; /* Light orange, matching others-color */
+    /* Using a light orange from the 'ODW 3' scale in theme.json, #fcf8f0 */
+    background-color: #fcf8f0;
 }
 .border-orange-200 { /* Add Report section border - now orange border */
-    border-color: #ec7700; /* Orange border */
+    /* Using an orange from the 'ODW 3' scale, #e6ba69 */
+    border-color: #e6ba69;
 }
 .bg-gray-50 { /* Filter section background */
-    background-color: #f9fafb; /* Very light gray */
+    background-color: #f9fafb; /* Very light gray, keeping as is unless a specific gray is in theme.json */
 }
 .border-gray-200 { /* Filter section border */
-    border-color: #e5e7eb; /* Light gray border */
+    border-color: #e5e7eb; /* Light gray border, keeping as is */
 }
 .footer {
     background-color: #eaedef; /* footer background from JSON */
