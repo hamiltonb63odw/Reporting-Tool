@@ -278,7 +278,7 @@ function displaySuggestedReportsUI(suggestedReports, accountData) {
     suggestedReportsSection.classList.remove('hidden'); // Show the section
     document.querySelector('.container > div:nth-child(4)').classList.add('hidden'); // Hide Add New Account
     document.querySelector('.container > div:nth-child(5)').classList.add('hidden'); // Hide Add New Report
-    document.getElementById('searchBar').classList.add('hidden'); // Hide search bar
+    document.getElementById('searchBar').closest('.mb-6').classList.add('hidden'); // Hide search bar
     document.getElementById('toggleFilters').closest('.bg-gray-50').classList.add('hidden'); // Hide filters
     document.getElementById('exportCsvBtn').classList.add('hidden'); // Hide export button
     document.getElementById('viewAccountsBtn').classList.add('hidden'); // Hide view toggles
@@ -432,7 +432,7 @@ function resetUIForNewAccount() {
     document.getElementById('suggestedReportsSection').classList.add('hidden'); // Hide suggestions
     document.querySelector('.container > div:nth-child(4)').classList.remove('hidden'); // Show Add New Account
     document.querySelector('.container > div:nth-child(5)').classList.remove('hidden'); // Show Add New Report
-    document.getElementById('searchBar').classList.remove('hidden'); // Show search bar
+    document.getElementById('searchBar').closest('.mb-6').classList.remove('hidden'); // Show search bar
     document.getElementById('toggleFilters').closest('.bg-gray-50').classList.remove('hidden'); // Show filters
     document.getElementById('exportCsvBtn').classList.remove('hidden'); // Show export button
     document.getElementById('viewAccountsBtn').classList.remove('hidden'); // Show view toggles
@@ -488,9 +488,12 @@ function setupEventListeners() {
             // Remove 'active-filter' from siblings
             document.querySelectorAll(`[data-filter-name="${filterName}"]`).forEach(btn => {
                 btn.classList.remove('active-filter');
+                btn.classList.add('btn-secondary');
+                btn.classList.remove('btn-primary');
             });
             // Add 'active-filter' to clicked button
-            e.target.classList.add('active-filter');
+            e.target.classList.add('active-filter', 'btn-primary');
+            e.target.classList.remove('btn-secondary');
             applyFilters();
         });
     });
@@ -535,9 +538,12 @@ function showMessage(message, type = 'info') {
         displayArea.classList.add('bg-blue-100', 'text-blue-800');
     }
 
-    setTimeout(() => {
-        displayArea.classList.add('hidden');
-    }, 5000); // Hide after 5 seconds
+    // Don't auto-hide info messages for processing
+    if (type !== 'info') {
+        setTimeout(() => {
+            displayArea.classList.add('hidden');
+        }, 5000); // Hide after 5 seconds
+    }
 }
 
 
@@ -660,37 +666,111 @@ function addNewReport() {
     };
 }
 
+/**
+ * **IMPROVED**
+ * A robust CSV parser that handles quoted fields.
+ * @param {string} csvText The full text of the CSV file.
+ * @returns {Array<Array<string>>} An array of arrays, representing rows and their cells.
+ */
+function robustCsvParser(csvText) {
+    const rows = [];
+    let currentRow = [];
+    let currentField = '';
+    let inQuotedField = false;
+
+    // Normalize line endings
+    csvText = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
+    for (let i = 0; i < csvText.length; i++) {
+        const char = csvText[i];
+
+        if (inQuotedField) {
+            if (char === '"') {
+                // Check if it's an escaped quote
+                if (i + 1 < csvText.length && csvText[i + 1] === '"') {
+                    currentField += '"';
+                    i++; // Skip the next quote
+                } else {
+                    inQuotedField = false;
+                }
+            } else {
+                currentField += char;
+            }
+        } else {
+            switch (char) {
+                case ',':
+                    currentRow.push(currentField);
+                    currentField = '';
+                    break;
+                case '"':
+                    // Start of a quoted field
+                    inQuotedField = true;
+                    break;
+                case '\n':
+                    currentRow.push(currentField);
+                    rows.push(currentRow);
+                    currentRow = [];
+                    currentField = '';
+                    break;
+                default:
+                    currentField += char;
+            }
+        }
+    }
+
+    // Add the last field and row if the file doesn't end with a newline
+    if (currentField || currentRow.length > 0) {
+        currentRow.push(currentField);
+        rows.push(currentRow);
+    }
+    
+    // Filter out empty rows that might result from trailing newlines
+    return rows.filter(row => row.length > 0 && (row.length > 1 || row[0] !== ''));
+}
+
+
 function handleAccountCsvUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
 
+    showMessage('Processing CSV file...', 'info');
+
     const reader = new FileReader();
     reader.onload = function(e) {
         const text = e.target.result;
+        // Use the new robust parser
         parseAccountCsv(text);
+    };
+    reader.onerror = function() {
+        showMessage('Error reading the file. Please try again.', 'error');
     };
     reader.readAsText(file);
 }
 
 function parseAccountCsv(csvText) {
-    const lines = csvText.split('\n').filter(line => line.trim() !== '');
-    if (lines.length === 0) {
-        showMessage('CSV file is empty.', 'error');
+    const parsedData = robustCsvParser(csvText);
+
+    if (parsedData.length < 2) {
+        showMessage('CSV file must contain a header row and at least one data row.', 'error');
         return;
     }
 
-    const headers = lines[0].split(',').map(h => h.trim());
-    const dataLines = lines.slice(1);
-
+    const headers = parsedData[0].map(h => h.trim());
+    const dataRows = parsedData.slice(1);
     const accountsToImport = [];
 
-    dataLines.forEach(line => {
-        const values = line.split(',').map(v => v.trim());
-        const account = { associatedReports: [] }; // Initialize associatedReports for each imported account
+    dataRows.forEach(values => {
+        // Skip empty rows
+        if (values.every(v => v.trim() === '')) return;
 
+        const account = { associatedReports: [] };
+        if (values.length !== headers.length) {
+            console.warn('Skipping mismatched row:', values);
+            return; // Skip rows that don't match the header count
+        }
+        
         headers.forEach((header, index) => {
-            let value = values[index];
-            // Normalize header names to match property names
+            let value = values[index] ? values[index].trim() : '';
             let propName = header.toLowerCase()
                                  .replace(/what wms does this account use\?/, 'wms')
                                  .replace(/account name/, 'accountName')
@@ -706,10 +786,10 @@ function parseAccountCsv(csvText) {
                                  .replace(/processes returns/, 'processesReturns')
                                  .replace(/temperature controlled/, 'temperatureControlled')
                                  .replace(/uses automation/, 'usesAutomation')
-                                 .replace(/ /g, ''); // Remove spaces for single-word keys like 'region', 'building'
+                                 .replace(/ /g, '');
 
             if (propName.includes('solutiontype') || propName.includes('pickingmethods') || propName.includes('transportationconfig')) {
-                account[propName] = value ? value.split(';').map(s => s.trim()).filter(s => s !== '') : []; // CSV often uses ; for multi-value
+                account[propName] = value ? value.split(',').map(s => s.trim()).filter(s => s !== '') : [];
             } else if (['foodGrade', 'hazardousMaterials', 'internationalShipping', 'processesReturns', 'temperatureControlled', 'usesAutomation'].includes(propName)) {
                 account[propName] = value.toLowerCase() === 'true' || value.toLowerCase() === 'yes' || value === '1';
             } else if (propName === 'numberOfShifts') {
@@ -718,7 +798,11 @@ function parseAccountCsv(csvText) {
                 account[propName] = value;
             }
         });
-        accountsToImport.push(account);
+        
+        // Basic validation to ensure it's a real account
+        if (account.accountName) {
+            accountsToImport.push(account);
+        }
     });
 
     if (accountsToImport.length > 0) {
@@ -727,10 +811,7 @@ function parseAccountCsv(csvText) {
         let errorCount = 0;
 
         accountsToImport.forEach(accountData => {
-            // Suggest reports for each imported account
             const suggestedReports = suggestReportsForAccount(accountData);
-            // Directly add suggested reports to the account for CSV import simplicity
-            // In a real app, you might want to present these for review after import.
             accountData.associatedReports = suggestedReports.map(sr => {
                 delete sr.suggested;
                 delete sr.uniqueId;
@@ -741,24 +822,24 @@ function parseAccountCsv(csvText) {
             request.onsuccess = () => {
                 importCount++;
                 if (importCount + errorCount === accountsToImport.length) {
-                    showMessage(`Finished importing ${importCount} accounts, with ${errorCount} errors.`, 'success');
+                    showMessage(`Finished! Imported ${importCount} accounts, with ${errorCount} errors.`, 'success');
                     loadAllAccounts();
                     populateFilterOptions();
                 }
             };
             request.onerror = (e) => {
-                console.error('Error adding account from CSV:', e.target.error);
+                console.error('Error adding account from CSV:', e.target.error, 'Data:', accountData);
                 errorCount++;
                 if (importCount + errorCount === accountsToImport.length) {
-                    showMessage(`Finished importing ${importCount} accounts, with ${errorCount} errors.`, 'error');
+                    showMessage(`Finished! Imported ${importCount} accounts, with ${errorCount} errors.`, 'error');
                     loadAllAccounts();
                     populateFilterOptions();
                 }
             };
         });
-        document.getElementById('accountCsvUpload').value = ''; // Clear file input
+        document.getElementById('accountCsvUpload').value = '';
     } else {
-        showMessage('No valid accounts found in CSV file.', 'error');
+        showMessage('No valid accounts could be imported from the file. Please check the content and headers.', 'error');
     }
 }
 
@@ -766,33 +847,43 @@ function parseAccountCsv(csvText) {
 function handleReportCsvUpload(event) {
     const file = event.target.files[0];
     if (!file) return;
+    
+    showMessage('Processing CSV file...', 'info');
 
     const reader = new FileReader();
     reader.onload = function(e) {
         const text = e.target.result;
         parseReportCsv(text);
     };
+    reader.onerror = function() {
+        showMessage('Error reading the file. Please try again.', 'error');
+    };
     reader.readAsText(file);
 }
 
 function parseReportCsv(csvText) {
-    const lines = csvText.split('\n').filter(line => line.trim() !== '');
-    if (lines.length === 0) {
-        showMessage('CSV file is empty.', 'error');
+    const parsedData = robustCsvParser(csvText);
+    
+    if (parsedData.length < 2) {
+        showMessage('CSV file must contain a header row and at least one data row.', 'error');
         return;
     }
 
-    const headers = lines[0].split(',').map(h => h.trim());
-    const dataLines = lines.slice(1);
-
+    const headers = parsedData[0].map(h => h.trim());
+    const dataRows = parsedData.slice(1);
     const reportsToImport = [];
 
-    dataLines.forEach(line => {
-        const values = line.split(',').map(v => v.trim());
-        const report = { parameters: {} }; // Initialize parameters for imported reports
+    dataRows.forEach(values => {
+        if (values.every(v => v.trim() === '')) return;
+
+        const report = { parameters: {} };
+        if (values.length !== headers.length) {
+            console.warn('Skipping mismatched row:', values);
+            return;
+        }
 
         headers.forEach((header, index) => {
-            let value = values[index];
+            let value = values[index] ? values[index].trim() : '';
             let propName = header.toLowerCase()
                                  .replace(/account id/, 'accountId')
                                  .replace(/report name/, 'name')
@@ -809,7 +900,10 @@ function parseReportCsv(csvText) {
                 report[propName] = value;
             }
         });
-        reportsToImport.push(report);
+
+        if (report.name && !isNaN(report.accountId)) {
+            reportsToImport.push(report);
+        }
     });
 
     if (reportsToImport.length > 0) {
@@ -820,15 +914,6 @@ function parseReportCsv(csvText) {
 
         reportsToImport.forEach(reportData => {
             const accountId = reportData.accountId;
-            if (isNaN(accountId)) {
-                errorCount++;
-                console.warn(`Skipping report due to invalid Account ID: ${JSON.stringify(reportData)}`);
-                if (importCount + errorCount === totalReports) {
-                    showMessage(`Finished importing ${importCount} reports, with ${errorCount} errors (invalid Account ID).`, 'error');
-                    loadAllAccounts();
-                }
-                return;
-            }
 
             const request = store.get(accountId);
             request.onsuccess = function() {
@@ -837,11 +922,7 @@ function parseReportCsv(csvText) {
                     if (!account.associatedReports) {
                         account.associatedReports = [];
                     }
-
-                    // Assign a random fit score to imported reports (could be enhanced later)
                     reportData.fitScore = Math.floor(Math.random() * 5) + 1;
-
-                    // Check for duplicates before adding
                     const isDuplicate = account.associatedReports.some(
                         r => r.name === reportData.name && r.type === reportData.type
                     );
@@ -852,47 +933,43 @@ function parseReportCsv(csvText) {
                         updateRequest.onsuccess = () => {
                             importCount++;
                             if (importCount + errorCount === totalReports) {
-                                showMessage(`Finished importing ${importCount} reports, with ${errorCount} errors.`, 'success');
+                                showMessage(`Finished! Imported ${importCount} reports, with ${errorCount} errors.`, 'success');
                                 loadAllAccounts();
                             }
                         };
-                        updateRequest.onerror = (e) => {
+                        updateRequest.onerror = () => {
                             errorCount++;
-                            console.error(`Error updating account ${accountId} with report ${reportData.name}:`, e.target.error);
                             if (importCount + errorCount === totalReports) {
-                                showMessage(`Finished importing ${importCount} reports, with ${errorCount} errors.`, 'error');
+                                showMessage(`Finished! Imported ${importCount} reports, with ${errorCount} errors.`, 'error');
                                 loadAllAccounts();
                             }
                         };
                     } else {
                         errorCount++;
-                        console.warn(`Skipping duplicate report for account ${accountId}: ${reportData.name}`);
                         if (importCount + errorCount === totalReports) {
-                            showMessage(`Finished importing ${importCount} reports, with ${errorCount} errors (duplicates).`, 'info');
+                            showMessage(`Finished! Imported ${importCount} reports, with ${errorCount} errors (some were duplicates).`, 'info');
                             loadAllAccounts();
                         }
                     }
                 } else {
                     errorCount++;
-                    console.warn(`Account with ID ${accountId} not found for report: ${reportData.name}`);
                     if (importCount + errorCount === totalReports) {
-                        showMessage(`Finished importing ${importCount} reports, with ${errorCount} errors (account not found).`, 'error');
+                        showMessage(`Finished! Imported ${importCount} reports, with ${errorCount} errors (some accounts not found).`, 'error');
                         loadAllAccounts();
                     }
                 }
             };
-            request.onerror = (e) => {
+            request.onerror = () => {
                 errorCount++;
-                console.error(`Error fetching account ${accountId} for report import:`, e.target.error);
                 if (importCount + errorCount === totalReports) {
-                    showMessage(`Finished importing ${importCount} reports, with ${errorCount} errors.`, 'error');
+                    showMessage(`Finished! Imported ${importCount} reports, with ${errorCount} errors.`, 'error');
                     loadAllAccounts();
                 }
             };
         });
-        document.getElementById('reportCsvUpload').value = ''; // Clear file input
+        document.getElementById('reportCsvUpload').value = '';
     } else {
-        showMessage('No valid reports found in CSV file.', 'error');
+        showMessage('No valid reports could be imported. Please check the content and headers.', 'error');
     }
 }
 
@@ -920,7 +997,7 @@ function populateAccountSelect(accounts) {
     accounts.forEach(account => {
         const option = document.createElement('option');
         option.value = account.id;
-        option.textContent = account.accountName;
+        option.textContent = `${account.accountName} (ID: ${account.id})`;
         select.appendChild(option);
     });
 }
@@ -943,12 +1020,11 @@ function applyFilters() {
     const reportSortOrder = document.getElementById('reportSortOrder').value;
 
     const booleanFilters = {};
-    document.querySelectorAll('[data-filter-name]').forEach(button => {
+    document.querySelectorAll('[data-filter-name].active-filter').forEach(button => {
         const filterName = button.dataset.filterName;
-        if (button.classList.contains('active-filter')) {
-            booleanFilters[filterName] = button.dataset.filterValue;
-        }
+        booleanFilters[filterName] = button.dataset.filterValue;
     });
+
 
     if (searchTerm) {
         filteredAccounts = filteredAccounts.filter(account =>
@@ -985,17 +1061,8 @@ function applyFilters() {
 
     let displayData = [];
     if (currentView === 'accounts') {
-        // When in 'accounts' view, account-level filters apply directly
         displayData = filteredAccounts;
-        document.getElementById('accountFiltersContainer').classList.remove('hidden');
-        document.getElementById('groupByContainer').classList.remove('hidden');
-        document.getElementById('reportSortContainer').classList.add('hidden');
     } else { // currentView === 'reports'
-        document.getElementById('accountFiltersContainer').classList.add('hidden'); // Hide account-level filters
-        document.getElementById('groupByContainer').classList.add('hidden'); // Hide group by
-        document.getElementById('reportSortContainer').classList.remove('hidden'); // Show report sorting
-
-        // Flatten reports and apply report-specific filters
         let allReports = [];
         filteredAccounts.forEach(account => {
             if (account.associatedReports) {
@@ -1043,7 +1110,10 @@ function renderContent(data, groupByField) {
         if (groupByField && groupByField !== 'none') {
             const groupedData = data.reduce((acc, account) => {
                 let key = account[groupByField];
-                if (Array.isArray(key)) { // For multi-value fields like customerSolutionType
+                if (Array.isArray(key)) {
+                    if (key.length === 0) {
+                        key = ['Uncategorized'];
+                    }
                     key.forEach(item => {
                         if (!acc[item]) acc[item] = [];
                         acc[item].push(account);
@@ -1056,10 +1126,10 @@ function renderContent(data, groupByField) {
                 return acc;
             }, {});
 
-            for (const groupKey in groupedData) {
+            Object.keys(groupedData).sort().forEach(groupKey => {
                 const groupContainer = document.createElement('div');
                 groupContainer.className = 'mb-8';
-                groupContainer.innerHTML = `<h3 class="text-xl font-bold text-gray-700 mb-4">${groupByField.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}: ${groupKey}</h3>`;
+                groupContainer.innerHTML = `<h3 class="text-xl font-bold text-gray-700 mb-4 border-b pb-2">${groupByField.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}: ${groupKey}</h3>`;
                 
                 const groupGrid = document.createElement('div');
                 groupGrid.className = 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6';
@@ -1068,7 +1138,7 @@ function renderContent(data, groupByField) {
                 });
                 groupContainer.appendChild(groupGrid);
                 contentDisplay.appendChild(groupContainer);
-            }
+            });
         } else {
             const grid = document.createElement('div');
             grid.className = 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6';
@@ -1090,35 +1160,39 @@ function renderContent(data, groupByField) {
 
 function createAccountCard(account) {
     const card = document.createElement('div');
-    card.className = 'account-card bg-white p-4 rounded-lg shadow-md border border-gray-200';
+    card.className = 'account-card bg-white p-4 rounded-lg shadow-md border border-gray-200 flex flex-col';
     card.innerHTML = `
-        <h3 class="text-xl font-bold text-primary-color mb-2">${account.accountName}</h3>
-        <p class="text-gray-700 mb-1"><span class="font-semibold">Region:</span> ${account.region}</p>
-        <p class="text-gray-700 mb-1"><span class="font-semibold">WMS:</span> ${account.wms}</p>
-        <p class="text-gray-700 mb-1"><span class="font-semibold">Type:</span> ${account.accountType || 'N/A'}</p>
-        <p class="text-gray-700 mb-1"><span class="font-semibold">Solution:</span> ${account.customerSolutionType && account.customerSolutionType.length > 0 ? account.customerSolutionType.join(', ') : 'N/A'}</p>
-        <p class="text-gray-700 mb-1"><span class="font-semibold">Building:</span> ${account.building || 'N/A'}</p>
-        <p class="text-gray-700 mb-1"><span class="font-semibold">Shifts:</span> ${account.numberOfShifts || 'N/A'}</p>
-        <p class="text-gray-700 mb-1"><span class="font-semibold">Picking Methods:</span> ${account.pickingMethods && account.pickingMethods.length > 0 ? account.pickingMethods.join(', ') : 'N/A'}</p>
-        <p class="text-gray-700 mb-1"><span class="font-semibold">SLAs:</span> ${account.customerSLAsText || 'N/A'}</p>
-        <p class="text-gray-700 mb-1"><span class="font-semibold">Transportation:</span> ${account.transportationConfig && account.transportationConfig.length > 0 ? account.transportationConfig.join(', ') : 'N/A'}</p>
-        <p class="text-gray-700 mb-1"><span class="font-semibold">Food Grade:</span> ${account.foodGrade ? 'Yes' : 'No'}</p>
-        <p class="text-gray-700 mb-1"><span class="font-semibold">Hazardous Materials:</span> ${account.hazardousMaterials ? 'Yes' : 'No'}</p>
-        <p class="text-gray-700 mb-1"><span class="font-semibold">International Shipping:</span> ${account.internationalShipping ? 'Yes' : 'No'}</p>
-        <p class="text-gray-700 mb-1"><span class="font-semibold">Processes Returns:</span> ${account.processesReturns ? 'Yes' : 'No'}</p>
-        <p class="text-gray-700 mb-1"><span class="font-semibold">Temp. Controlled:</span> ${account.temperatureControlled ? 'Yes' : 'No'}</p>
-        <p class="text-gray-700 mb-1"><span class="font-semibold">Uses Automation:</span> ${account.usesAutomation ? 'Yes' : 'No'}</p>
-        <button class="btn btn-red btn-sm mt-4 delete-account-btn" data-id="${account.id}">Delete Account</button>
-        <div class="mt-4 border-t pt-3">
+        <div class="flex-grow">
+            <h3 class="text-xl font-bold text-primary-color mb-2">${account.accountName} <span class="text-sm font-normal text-gray-500">(ID: ${account.id})</span></h3>
+            <p class="text-gray-700 mb-1"><span class="font-semibold">Region:</span> ${account.region}</p>
+            <p class="text-gray-700 mb-1"><span class="font-semibold">WMS:</span> ${account.wms}</p>
+            <p class="text-gray-700 mb-1"><span class="font-semibold">Type:</span> ${account.accountType || 'N/A'}</p>
+            <p class="text-gray-700 mb-1"><span class="font-semibold">Solution:</span> ${account.customerSolutionType && account.customerSolutionType.length > 0 ? account.customerSolutionType.join(', ') : 'N/A'}</p>
+            <p class="text-gray-700 mb-1"><span class="font-semibold">Building:</span> ${account.building || 'N/A'}</p>
+            <p class="text-gray-700 mb-1"><span class="font-semibold">Shifts:</span> ${account.numberOfShifts || 'N/A'}</p>
+            <p class="text-gray-700 mb-1"><span class="font-semibold">Picking Methods:</span> ${account.pickingMethods && account.pickingMethods.length > 0 ? account.pickingMethods.join(', ') : 'N/A'}</p>
+            <p class="text-gray-700 mb-1"><span class="font-semibold">SLAs:</span> ${account.customerSLAsText || 'N/A'}</p>
+            <p class="text-gray-700 mb-1"><span class="font-semibold">Transportation:</span> ${account.transportationConfig && account.transportationConfig.length > 0 ? account.transportationConfig.join(', ') : 'N/A'}</p>
+            
+            <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
+                <p><span class="font-semibold">Food Grade:</span> ${account.foodGrade ? 'Yes' : 'No'}</p>
+                <p><span class="font-semibold">Hazmat:</span> ${account.hazardousMaterials ? 'Yes' : 'No'}</p>
+                <p><span class="font-semibold">Int'l Ship:</span> ${account.internationalShipping ? 'Yes' : 'No'}</p>
+                <p><span class="font-semibold">Returns:</span> ${account.processesReturns ? 'Yes' : 'No'}</p>
+                <p><span class="font-semibold">Temp Control:</span> ${account.temperatureControlled ? 'Yes' : 'No'}</p>
+                <p><span class="font-semibold">Automation:</span> ${account.usesAutomation ? 'Yes' : 'No'}</p>
+            </div>
+        </div>
+
+        <div class="mt-4 pt-3 border-t">
             <h4 class="font-semibold text-subtitle-color mb-2">Associated Reports (${account.associatedReports ? account.associatedReports.length : 0})</h4>
-            <div id="reports-for-account-${account.id}">
+            <div id="reports-for-account-${account.id}" class="max-h-48 overflow-y-auto pr-2">
                 ${account.associatedReports && account.associatedReports.length > 0
                     ? account.associatedReports.map(report => `
                         <div class="report-item-card bg-gray-50 p-3 rounded-md mb-2 border border-gray-200">
                             <p class="font-medium text-text-color">${report.name} <span class="text-sm text-gray-500">(${report.type})</span></p>
                             <p class="text-xs text-gray-600">Path: ${report.reportPath || 'N/A'}</p>
                             <p class="text-xs text-gray-600">Tags: ${report.tags && report.tags.length > 0 ? report.tags.join(', ') : 'N/A'}</p>
-                            <p class="text-xs text-gray-600">Fit Score: ${report.fitScore || 'N/A'}</p>
                             <div class="text-xs text-gray-700">
                                 <strong>Parameters:</strong>
                                 ${Object.entries(report.parameters || {}).map(([key, value]) => `<span class="ml-1">${key}: ${value || 'N/A'}</span>`).join(', ')}
@@ -1128,6 +1202,9 @@ function createAccountCard(account) {
                     `).join('')
                     : '<p class="text-sm text-gray-500">No reports associated.</p>'}
             </div>
+        </div>
+        <div class="mt-4 text-right">
+             <button class="btn btn-red btn-sm delete-account-btn" data-id="${account.id}">Delete Account</button>
         </div>
     `;
 
@@ -1147,7 +1224,6 @@ function createReportCard(report) {
         <p class="text-gray-700 mb-1"><span class="font-semibold">Associated Account:</span> ${report.accountName || 'N/A'} (ID: ${report.accountId})</p>
         <p class="text-gray-700 mb-1"><span class="font-semibold">Path:</span> ${report.reportPath || 'N/A'}</p>
         <p class="text-gray-700 mb-1"><span class="font-semibold">Tags:</span> ${report.tags && report.tags.length > 0 ? report.tags.join(', ') : 'N/A'}</p>
-        <p class="text-gray-700 mb-1"><span class="font-semibold">Fit Score:</span> ${report.fitScore || 'N/A'}</p>
         <div class="mt-2 text-sm text-gray-700">
             <strong>Parameters:</strong>
             ${Object.entries(report.parameters || {}).map(([key, value]) => `<span class="ml-1">${key}: ${value || 'N/A'}</span>`).join(', ')}
@@ -1250,6 +1326,8 @@ function populateFilterOptions() {
 
 function populateSelect(elementId, options, isMulti = false) {
     const select = document.getElementById(elementId);
+    const currentValue = select.value;
+    
     if (!isMulti) {
         select.innerHTML = '<option value="">All</option>'; // Default for single select
     } else {
@@ -1262,24 +1340,35 @@ function populateSelect(elementId, options, isMulti = false) {
         option.textContent = optionText;
         select.appendChild(option);
     });
+
+    select.value = currentValue; // Preserve selection
 }
 
 function updateView() {
-    document.getElementById('viewAccountsBtn').classList.remove('btn-primary', 'btn-secondary');
-    document.getElementById('viewReportsBtn').classList.remove('btn-primary', 'btn-secondary');
+    const accountsBtn = document.getElementById('viewAccountsBtn');
+    const reportsBtn = document.getElementById('viewReportsBtn');
+    
+    accountsBtn.classList.remove('btn-primary', 'btn-secondary');
+    reportsBtn.classList.remove('btn-primary', 'btn-secondary');
+
+    const accountFilters = document.getElementById('accountFiltersContainer');
+    const reportFilters = document.getElementById('reportFiltersContainer');
+    const groupBy = document.getElementById('groupByContainer');
+
 
     if (currentView === 'accounts') {
-        document.getElementById('viewAccountsBtn').classList.add('btn-primary');
-        document.getElementById('viewReportsBtn').classList.add('btn-secondary');
-        document.getElementById('groupByContainer').classList.remove('hidden');
-        document.getElementById('reportSortContainer').classList.add('hidden');
-        document.getElementById('accountFiltersContainer').classList.remove('hidden'); // Ensure account filters are visible
-    } else {
-        document.getElementById('viewAccountsBtn').classList.add('btn-secondary');
-        document.getElementById('viewReportsBtn').classList.add('btn-primary');
-        document.getElementById('groupByContainer').classList.add('hidden');
-        document.getElementById('reportSortContainer').classList.remove('hidden');
-        document.getElementById('accountFiltersContainer').classList.add('hidden'); // Hide account filters
+        accountsBtn.classList.add('btn-primary');
+        reportsBtn.classList.add('btn-secondary');
+        accountFilters.classList.remove('hidden');
+        reportFilters.classList.add('hidden');
+        groupBy.classList.remove('hidden');
+
+    } else { // reports view
+        accountsBtn.classList.add('btn-secondary');
+        reportsBtn.classList.add('btn-primary');
+        accountFilters.classList.add('hidden');
+        reportFilters.classList.remove('hidden');
+        groupBy.classList.add('hidden');
     }
     applyFilters();
 }
@@ -1319,14 +1408,10 @@ function exportAccountsToCsv() {
         row.push(account.temperatureControlled ? 'TRUE' : 'FALSE');
         row.push(account.usesAutomation ? 'TRUE' : 'FALSE');
 
-        // Serialize reports for CSV
         const reportsString = account.associatedReports && account.associatedReports.length > 0
             ? JSON.stringify(account.associatedReports.map(r => ({
-                name: r.name,
-                type: r.type,
-                path: r.reportPath,
-                tags: r.tags ? r.tags.join('|') : '', // Use | for tags within a report
-                fitScore: r.fitScore,
+                name: r.name, type: r.type, path: r.reportPath,
+                tags: r.tags ? r.tags.join('|') : '',
                 parameters: r.parameters ? JSON.stringify(r.parameters) : '{}'
               })))
             : '[]';
@@ -1337,7 +1422,7 @@ function exportAccountsToCsv() {
 
     const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
     const link = document.createElement('a');
-    if (link.download !== undefined) { // feature detection
+    if (link.download !== undefined) {
         const url = URL.createObjectURL(blob);
         link.setAttribute('href', url);
         link.setAttribute('download', 'odw_accounts_reports.csv');
