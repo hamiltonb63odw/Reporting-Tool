@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>ODW Report Filtering Tool</title>
-    <link rel="icon" type="image/png" href="odwLogo.png">
+    <link rel="icon" type="image/png" href="ODW favicon-32x32 1.png">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="style.css">
@@ -22,6 +22,10 @@
             <button id="viewReportsBtn" class="btn btn-secondary">
                 View All Reports
             </button>
+        </div>
+
+        <div class="mb-6">
+            <input type="text" id="searchBar" placeholder="Search by account name, region, or WMS..." class="w-full p-2 border rounded-md" />
         </div>
 
         <div class="bg-blue-50 p-4 rounded-lg mb-6 shadow-inner border border-blue-200">
@@ -44,6 +48,7 @@
                         <input type="text" id="newCustomerSolutionType" placeholder="Solution Type (comma-sep)" class="p-2 border rounded" />
                         <input type="text" id="newAccountBuilding" placeholder="Building" class="p-2 border rounded" />
                         <input type="number" id="newNumberOfShifts" placeholder="Number of Shifts" class="p-2 border rounded" />
+                        <input type="text" id="newPickingMethods" placeholder="Picking Methods (comma-sep)" class="p-2 border rounded" />
                         <input type="text" id="newCustomerSLAsText" placeholder="Customer SLAs Text" class="p-2 border rounded col-span-full" />
                         <input type="text" id="newTransportationConfig" placeholder="Transportation Config (comma-sep)" class="p-2 border rounded col-span-full" />
 
@@ -287,6 +292,12 @@
                 </div>
             </div>
         </div>
+
+        <div class="mb-6 text-center">
+            <button id="exportCsvBtn" class="btn btn-primary">Export All Accounts to CSV</button>
+        </div>
+
+        <div id="messageDisplay" class="text-center p-3 rounded-md mb-4 hidden"></div>
 
         <div id="contentDisplay">
             </div>
