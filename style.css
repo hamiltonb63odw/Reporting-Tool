@@ -1,7 +1,7 @@
 /* Define CSS Variables from JSON branding */
 :root {
-    --primary-color: #ec7700; /* Dark blue from JSON dataColors primaryColor */
     --others-color: #013466; /* Orange from JSON dataColors othersColor */
+    --primary-color: #ec7700; /* Dark blue from JSON dataColors primaryColor */
     --error-color: #E91C27; /* From JSON dataColors errorColor */
     --null-color: #CCCCCC; /* From JSON dataColors nullColor */
     
