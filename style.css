@@ -1,7 +1,7 @@
 /* Define CSS Variables from JSON branding */
 :root {
-    --primary-color: #013466; /* Dark blue from JSON dataColors primaryColor */
-    --others-color: #ec7700; /* Orange from JSON dataColors othersColor */
+    --primary-color: #ec7700; /* Dark blue from JSON dataColors primaryColor */
+    --others-color: #013466; /* Orange from JSON dataColors othersColor */
     --error-color: #E91C27; /* From JSON dataColors errorColor */
     --null-color: #CCCCCC; /* From JSON dataColors nullColor */
     
@@ -10,7 +10,7 @@
     --subtitle-color: #073869; /* From JSON _variables @SubtitleColor */
     --text-color: #363636; /* From JSON _variables @TextColor */
     --footer-color: #073869; /* From JSON _variables @FooterColor */
-    --background-color: #ffffff; /* From JSON _variables @BackgroundColor */
+    --background-color: #073869; /* From JSON _variables @BackgroundColor */
     --axis-major-color: #ccd5da; /* From JSON _variables @AxisMajorColor */
     --axis-minor-color: #ccd5da; /* From JSON _variables @AxisMinorColor */
 
