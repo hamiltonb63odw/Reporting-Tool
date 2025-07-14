@@ -1,1240 +1,1361 @@
-// --- Data from previous React app, adapted for vanilla JS ---
-let accounts = [
+// IndexedDB setup
+const DB_NAME = 'odwReportDB';
+const DB_VERSION = 1;
+const STORE_NAME_ACCOUNTS = 'accounts';
+const STORE_NAME_REPORTS = 'reports'; // New store for standardized reports if needed separately, but we'll embed for simplicity.
+
+let db;
+let currentView = 'accounts'; // 'accounts' or 'reports'
+let currentEditedAccount = null; // To hold account during report suggestion phase
+
+// Predefined list of standardized reports with matching criteria and default parameters
+const standardReports = [
     {
-        "id": "account-0", "submissionDate": "Jul 11, 2025", "region": "Great Lakes", "wms": "Symmetry", "accountType": "Fixed Variable",
-        "customerSolutionType": ["Retail"], "pickingMethods": ["Case Pick", "Each Pick", "Pallet Pick"], "numberOfShifts": "2",
-        "foodGrade": true, "hazardousMaterials": false, "internationalShipping": true, "processesReturns": true, "temperatureControlled": false, "usesAutomation": true,
-        "customerSLAsText": "Goal\t\nDock to Stock\t98.0%\t\nOn Time Shipping\t98.0%\t\nOrder Accuracy\t99.0%\t\nNet Inventory Accuracy\t99.0%\t\nLocation Inventory Accuracy\t95.0%",
-        "transportationConfig": ["LTL Truck Load", "Customer Pickups", "Transportation Management", "Customer Broker"],
-        "accountName": "HARIBO OF AMERICA INC.", "building": "Bristol 3",
-        "associatedReports": [
-            { name: "Target PO Report", path: "", type: "Adjunct", tags: ["Daily", "Critical"] },
-            { name: "Employee Performance #", path: "", type: "Excel Refreshable", tags: ["Weekly"] }
-        ]
+        id: 'std_daily_summary',
+        name: 'Daily Operations Summary',
+        type: 'Operational',
+        tags: ['Daily', 'Summary', 'Performance'],
+        defaultParameters: { frequency: 'Daily', emailRecipient: '', threshold: null },
+        matchingCriteria: {
+            // Accounts that have more than 1 shift and process returns are good candidates
+            numberOfShifts: { min: 2 },
+            processesReturns: true
+        },
+        description: 'Provides a daily overview of key operational metrics like inbound/outbound volume, labor utilization, and open orders.'
     },
     {
-        "id": "account-1", "submissionDate": "Jul 11, 2025", "region": "East", "wms": "Symmetry", "accountType": "Transactional",
-        "customerSolutionType": ["Retail", "Dropship"], "pickingMethods": ["Case Pick", "Pallet Pick"], "numberOfShifts": "1",
-        "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": true, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "Monday through Friday\nShips Within: Designated pick up date and time pre-scheduled and noted in order ship by date information on the order",
-        "transportationConfig": ["LTL Truck Load"],
-        "accountName": "Servus Boots", "building": "Englewood 1",
-        "associatedReports": []
+        id: 'std_inventory_accuracy',
+        name: 'Inventory Accuracy Report',
+        type: 'Audit',
+        tags: ['Inventory', 'Accuracy', 'Audit'],
+        defaultParameters: { frequency: 'Weekly', minAccuracyThreshold: 0.98 },
+        matchingCriteria: {
+            // All accounts need inventory accuracy
+            // No specific criteria, apply to all or broad WMS types
+            wms: ['SAP EWM', 'Manhattan WMOS', 'JDA WMS', 'HighJump', 'RedPrairie', 'Blue Yonder', 'LogFire', 'Infor WMS', 'Oracle WMS', 'Custom']
+        },
+        description: 'Tracks the accuracy of inventory counts against system records, highlighting discrepancies and trends.'
     },
     {
-        "id": "account-2", "submissionDate": "Jul 11, 2025", "region": "Great Lakes", "wms": "Symmetry", "accountType": "Transactional",
-        "customerSolutionType": ["ECOMM", "Retail", "DTC"], "pickingMethods": ["Case Pick", "Each Pick", "Pallet Pick", "Layer Pick", "Vas Pick"], "numberOfShifts": "1",
-        "foodGrade": true, "hazardousMaterials": false, "internationalShipping": true, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "Dock to Stock\t99.00%\nOn Time Shipping\t95.00%\nOrder Accuracy\t99.50%\nNet Inventory Accuracy\t99.50%\nLocation Inventory Accuracy\t95.00%\nOrder Availability Scheduled Ship Time\t98.00%",
-        "transportationConfig": ["LTL Truck Load", "Customer Pickups", "Single Freight Broker", "Transportation Management", "Customer Broker"],
-        "accountName": "E&C'S SNACKS, LLC", "building": "Romeoville 2",
-        "associatedReports": []
+        id: 'std_customer_sla',
+        name: 'Customer SLA Performance',
+        type: 'Performance',
+        tags: ['SLA', 'Customer', 'Performance', 'Daily'],
+        defaultParameters: { frequency: 'Daily', slaTarget: null, emailRecipient: '' },
+        matchingCriteria: {
+            // Accounts with defined customer SLAs are good candidates
+            customerSLAsText: { exists: true },
+            accountType: ['Dedicated', 'Multi-Client']
+        },
+        description: 'Monitors performance against customer Service Level Agreements (SLAs), including on-time shipping and order fulfillment rates.'
     },
     {
-        "id": "account-3", "submissionDate": "Jul 11, 2025", "region": "Great Lakes", "wms": "Symmetry", "accountType": "Transactional",
-        "customerSolutionType": ["DTC"], "pickingMethods": ["Case Pick", "Each Pick", "Pallet Pick"], "numberOfShifts": "1",
-        "foodGrade": false, "hazardousMaterials": false, "internationalShipping": true, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "Dock to Stock\t99.00%\nOn Time Shipping\t98.00%\nOrder Accuracy\t99.90%\nNet Inventory Accuracy\t99.00%\nLocation Inventory Accuracy\t95.00%",
-        "transportationConfig": ["LTL Truck Load", "Customer Pickups", "Single Freight Broker", "Customer Broker"],
-        "accountName": "ANDEN -RESEARCH PRODUCTS CORP.", "building": "Romeoville 2",
-        "associatedReports": []
+        id: 'std_temp_control_monitoring',
+        name: 'Temperature Control Monitoring',
+        type: 'Compliance',
+        tags: ['Temperature', 'Compliance', 'Audit'],
+        defaultParameters: { frequency: 'Daily', minTemp: 34, maxTemp: 40, unit: 'Fahrenheit' },
+        matchingCriteria: {
+            temperatureControlled: true
+        },
+        description: 'Ensures compliance with temperature control requirements for sensitive goods, logging temperatures and deviations.'
     },
     {
-        "id": "account-4", "submissionDate": "Jul 11, 2025", "region": "Great Lakes", "wms": "Symmetry", "accountType": "Transactional",
-        "customerSolutionType": ["ECOMM", "Retail", "DTC"], "pickingMethods": ["Case Pick", "Each Pick", "Pallet Pick", "Vas Pick"], "numberOfShifts": "1",
-        "foodGrade": true, "hazardousMaterials": false, "internationalShipping": true, "processesReturns": true, "temperatureControlled": false, "usesAutomation": true,
-        "customerSLAsText": "Dock to Stock\t99.0%\nOn Time Shipping\t98.0%\nOrder Accuracy\t99.9%\nNet Inventory Accuracy\t99.0%\nOrder Availability Scheduled Ship Time\t98.0%",
-        "transportationConfig": ["LTL Truck Load", "Customer Pickups", "Single Freight Broker", "Customer Broker"],
-        "accountName": "BULLETPROOF 360", "building": "Romeoville 2",
-        "associatedReports": []
+        id: 'std_hazardous_materials',
+        name: 'Hazardous Materials Compliance',
+        type: 'Compliance',
+        tags: ['Hazardous', 'Compliance', 'Safety'],
+        defaultParameters: { frequency: 'Monthly', regulatoryBody: '' },
+        matchingCriteria: {
+            hazardousMaterials: true
+        },
+        description: 'Reports on the handling and storage of hazardous materials, ensuring adherence to safety and regulatory standards.'
     },
     {
-        "id": "account-5", "submissionDate": "Jul 9, 2025", "region": "West", "wms": "Symmetry", "accountType": "Fixed Variable",
-        "customerSolutionType": ["ECOMM", "Retail"], "pickingMethods": ["Case Pick", "Each Pick"], "numberOfShifts": "1",
-        "foodGrade": true, "hazardousMaterials": false, "internationalShipping": true, "processesReturns": true, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "On time receiving\nOn time shipping\nOUtbound fill rate\nNet inventory\nAbs Inventory",
-        "transportationConfig": ["LTL Truck Load", "Customer Pickups", "Transportation Management"],
-        "accountName": "KA'CHAVA", "building": "Redlands 2",
-        "associatedReports": []
+        id: 'std_automation_utilization',
+        name: 'Automation Utilization Report',
+        type: 'Operational',
+        tags: ['Automation', 'Efficiency', 'Daily'],
+        defaultParameters: { frequency: 'Daily', targetUtilization: 0.8 },
+        matchingCriteria: {
+            usesAutomation: true
+        },
+        description: 'Provides insights into the utilization and efficiency of automated systems within the warehouse.'
     },
     {
-        "id": "account-6", "submissionDate": "Jul 9, 2025", "region": "West", "wms": "Symmetry", "accountType": "Transactional",
-        "customerSolutionType": ["ECOMM", "Retail", "DTC"], "pickingMethods": ["Case Pick", "Each Pick", "Pallet Pick"], "numberOfShifts": "1",
-        "foodGrade": false, "hazardousMaterials": false, "internationalShipping": true, "processesReturns": true, "temperatureControlled": false, "usesAutomation": true,
-        "customerSLAsText": "Dock2Stock...within 48 hours\nOn time shipping... Within 48 hours\nNet Inventory",
-        "transportationConfig": ["LTL Truck Load", "Customer Pickups"],
-        "accountName": "ALPHATHETA MUSIC AMERICAS INC.", "building": "Redlands 2",
-        "associatedReports": []
-    },
-    {
-        "id": "account-7", "submissionDate": "Jul 9, 2025", "region": "West", "wms": "Korber", "accountType": "Transactional",
-        "customerSolutionType": ["Retail"], "pickingMethods": ["Case Pick", "Each Pick"], "numberOfShifts": "3",
-        "foodGrade": false, "hazardousMaterials": false, "internationalShipping": true, "processesReturns": true, "temperatureControlled": false, "usesAutomation": true,
-        "customerSLAsText": "Dock to Stock- 24 Hours\nOn Time Shipping- 5 Days\nOrder Accuracy- 99.0%\nNet Inventory Accuracy- 99.5%\nAbs Inventory Accuracy-99.0%",
-        "transportationConfig": ["LTL Truck Load", "Customer Broker"],
-        "accountName": "Elf CA", "building": "Ontario",
-        "associatedReports": []
-    },
-    {
-        "id": "account-8", "submissionDate": "Jul 9, 2025", "region": "East", "wms": "Korber", "accountType": "Cost Plus",
-        "customerSolutionType": ["ECOMM"], "pickingMethods": ["Each Pick"], "numberOfShifts": "1",
-        "foodGrade": true, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": true, "temperatureControlled": false, "usesAutomation": true,
-        "customerSLAsText": "Dispatch On-Time / goal 99.5%\nLoad On-Time (Dock to Trailer) / goal 95.0%\nInventory Accuracy / goal 99.5%\nUnload On-Time (Trailer to Dock) / goal 95.0%\nReceiving On-Time (Dock to Stock) / goal 98.5%\nPacking Accuracy / goal 99.0%",
-        "transportationConfig": ["LTL Truck Load"],
-        "accountName": "Lionstone", "building": "DC11",
-        "associatedReports": []
-    },
-    {
-        "id": "account-9", "submissionDate": "Jul 8, 2025", "region": "East", "wms": "Symmetry", "accountType": "Transactional",
-        "customerSolutionType": ["Retail"], "pickingMethods": ["Case Pick", "Pallet Pick", "Layer Pick"], "numberOfShifts": "2",
-        "foodGrade": true, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": true, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "48 hours dock to stock",
-        "transportationConfig": ["LTL Truck Load", "Customer Pickups", "Transportation Management"],
-        "accountName": "Beech-Nut", "building": "DC08",
-        "associatedReports": []
-    },
-    {
-        "id": "account-10", "submissionDate": "Jul 8, 2025", "region": "Great Lakes", "wms": "Symmetry", "accountType": "Cost Plus",
-        "customerSolutionType": ["Retail"], "pickingMethods": ["Case Pick", "Pallet Pick", "Layer Pick"], "numberOfShifts": "1",
-        "foodGrade": true, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": true, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "KPI\tMeasurement\tGoal\nDock to Stock\t24 hrs. from truck check in to put away: {(1-(the sum of the number of Pos that didn't make the 24 hr. goal/total number of Pos received in a month}]\t99.5%\nInventory Accuracy\t[{1-(the sum of the absolute variance in dollars/the sum of the total inventory in dollars}] * 100%\t99.0%\nOn-Time Shipment\t[1-sum(the sum of the number of shipments that didn't not ship by ship by date/total number of shipments)] *1005\t99.5%\nOrder Accuracy at Case level\tShipped the correct item and quantity: [{1-(the sum of the number ofcases that were not correct/total number of cases shipped in a month}] * 100%}\t99.5%",
-        "transportationConfig": ["LTL Truck Load", "Customer Pickups", "Transportation Management", "Customer Broker"],
-        "accountName": "MORTON SALT INC.", "building": "Melrose Park",
-        "associatedReports": []
-    },
-    {
-        "id": "account-11", "submissionDate": "Jul 7, 2025", "region": "East", "wms": "Korber", "accountType": "Transactional",
-        "customerSolutionType": ["ECOMM", "Retail", "Dropship"], "pickingMethods": ["Case Pick", "Each Pick"], "numberOfShifts": "1",
-        "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": true, "temperatureControlled": false, "usesAutomation": true,
-        "customerSLAsText": "Ecom/Drop Ships: Same Day prior to noon cutoff\nWholesale: Prior to cancel\nIndependents: 48 hours",
-        "transportationConfig": ["LTL Truck Load"],
-        "accountName": "Vida", "building": "Englewood 1",
-        "associatedReports": []
-    },
-    {
-        "id": "account-12", "submissionDate": "Jul 2, 2025", "region": "East", "wms": "Korber", "accountType": "Cost Plus",
-        "customerSolutionType": ["Retail"], "pickingMethods": ["Case Pick", "Each Pick", "Pallet Pick"], "numberOfShifts": "2",
-        "foodGrade": true, "hazardousMaterials": false, "internationalShipping": true, "processesReturns": true, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "48 hours.  On Time Shipping 99.85%, Order Accuracy (cases shipped vs cases shipped in error) 99.65%.\n\nInbound 100% Ocean Containers from Asia:  Dock to Stock 99.50% within 48 hours.",
-        "transportationConfig": ["LTL Truck Load", "Customer Pickups", "Customer Broker"],
-        "accountName": "HANDGARDS INC", "building": "DC07",
-        "associatedReports": []
-    },
-    {
-        "id": "account-13", "submissionDate": "Jul 1, 2025", "region": "East", "wms": "Hormel's WMS", "accountType": "Fixed Variable",
-        "customerSolutionType": ["Retail"], "pickingMethods": ["Case Pick", "Pallet Pick"], "numberOfShifts": "2",
-        "foodGrade": true, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": true, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "Dock to Stock - 97%\nOn Time Shipping - 98%\nInventory Shrinkage Allowance - .0000825 of throughput (cs in + cs out /2)",
-        "transportationConfig": ["LTL Truck Load"],
-        "accountName": "Hormel", "building": "DC13",
-        "associatedReports": []
-    },
-    {
-        "id": "account-14", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Abbott", "building": "N/A",
-        "associatedReports": [
-            { name: "Adjustments by Store/Date with cc:S:Accounts\\Abbott Finished Goods\\", path: "", type: "Excel Refreshable", tags: [] },
-            { name: "Cycle count Dashboard", path: "", type: "Refreshable", tags: ["Daily"] },
-            { name: "Hours by Hour Report", path: "", type: "Refreshable", tags: [] },
-            { name: "UB By Location Report", path: "S:\\Accounts. If you can download this", type: "Refreshable", tags: [] },
-            { name: "Employee Performance #", path: "", type: "Refreshable", tags: ["Weekly"] },
-            { name: "Financial Reporting in the Portal", path: "", type: "Refreshable", tags: ["Monthly"] },
-            { name: "Case Headroom for Item Locations", path: "S:\\Accounts\\Abbott Finished Goods\\", type: "Refreshable", tags: [] },
-            { name: "Historical by Item_Lot", path: "S:\\Accounts\\Abbott Finished Goods\\", type: "Refreshable", tags: [] },
-            { name: "1B3 Productivity", path: "", type: "Refreshable", tags: [] },
-            { name: "Health Check", path: "", type: "Refreshable", tags: ["Daily"] },
-            { name: "Historical by Locations by Item", path: "S:\\Accounts\\Abbott Finished Goods\\", type: "Refreshable", tags: [] },
-            { name: "Symmetry Amazon Orders", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-15", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Riceland", "building": "N/A",
-        "associatedReports": [
-            { name: "Dock to Stock", path: "S:\\Accounts\\Riceland\\Reporting", type: "Refreshable", tags: ["Daily"] },
-            { name: "Back to Dock Report", path: "S:\\Accounts\\Riceland\\Reporting", type: "Refreshable", tags: [] },
-            { name: "Order Flow Dashboard", path: "S:\\Accounts\\Riceland\\Reporting", type: "Refreshable", tags: ["Critical"] },
-            { name: "Abbott Countbacks and 'Query C:S:\\Accounts\\Abbott Finished Goods\\", path: "", type: "Refreshable", tags: [] },
-            { name: "1P8 Productivity Report", path: "", type: "Refreshable", tags: [] },
-            { name: "Item Master Weight for Pack Weight", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-16", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "ODW", "building": "N/A",
-        "associatedReports": [
-            { name: "Packing List Manifest", path: "S:\\Accounts\\Orveon\\Inventory folder", type: "Refreshable", tags: [] },
-            { name: "Historical Locations Report", path: "S:\\Accounts\\Orveon\\Inventory folder", type: "Refreshable", tags: [] },
-            { name: "Outbound Availability Report", path: "", type: "Refreshable", tags: [] },
-            { name: "Inventory Accuracy Report", path: "", type: "Refreshable", tags: ["Critical"] },
-            { name: "Variance Reporting - Detailed and Summarized by Item CR", path: "", type: "Refreshable", tags: [] },
-            { name: "Bucket to Bucket Moves", path: "", type: "Refreshable", tags: [] },
-            { name: "Bucket to Bucket Moves", path: "", type: "Refreshable", tags: [] },
-            { name: "Cycle Count Dashboard", path: "", type: "Refreshable", tags: ["Daily"] },
-            { name: "Dock Schedule", path: "", type: "Refreshable", tags: [] },
-            { name: "Contract Logistics - Transportation Management Dashboard", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-17", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Luxury Brands", "building": "N/A",
-        "associatedReports": [
-            { name: "Packing List Manifest", path: "S:\\Accounts\\Orveon\\Inventory folder", type: "Refreshable", tags: ["Weekly"] }
-        ]
-    },
-    {
-        "id": "account-18", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Orveon", "building": "Romeoville 1 - All Clients in DC",
-        "associatedReports": [
-            { name: "Export to Bucket Moves", path: "", type: "Refreshable", tags: [] },
-            { name: "Bucket to Bucket Moves", path: "", type: "Refreshable", tags: [] },
-            { name: "Dock Schedule", path: "", type: "Refreshable", tags: [] },
-            { name: "Inventory Reconciliation", path: "", type: "Refreshable", tags: [] },
-            { name: "Forward Pick Moves Needed", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-19", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Haribo", "building": "N/A",
-        "associatedReports": [
-            { name: "Target PO Report", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-20", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "E&C Snacks", "building": "N/A",
-        "associatedReports": [
-            { name: "Financial Reporting in the Portal", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-21", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Great Lakes", "building": "N/A",
-        "associatedReports": [
-            { name: "Case Headroom for Item Locations", path: "S:\\Accounts\\Abbott Finished Goods\\", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-22", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Symmetry", "building": "N/A",
-        "associatedReports": [
-            { name: "Symmetry Amazon Orders", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-23", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Korber", "building": "N/A",
-        "associatedReports": [
-            { name: "OMS Pick Report", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-24", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Smart", "building": "N/A",
-        "associatedReports": [
-            { name: "Item Master Weight for Pack Weight", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-25", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "3PL Clients", "building": "N/A",
-        "associatedReports": [
-            { name: "Freight Consolidation", path: "S:\\Accounts\\3PL Clients\\Order Flow DB", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-26", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Ka'Chava", "building": "N/A",
-        "associatedReports": [
-            { name: "Cancelled Orders Portal Report", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-27", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Hilco", "building": "N/A",
-        "associatedReports": [
-            { name: "Hilco Open Orders.xlsx", path: "S:\\Accounts\\Hilco Open Orders.xlsx", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-28", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Premier Nutrition", "building": "N/A",
-        "associatedReports": [
-            { name: "Abbott schedule 05.17.24.xlsm", path: "S:\\Accounts\\Abbott schedule", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-29", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Branch Basics", "building": "N/A",
-        "associatedReports": [
-            { name: "2024 Cycle count Dashboard", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-30", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Elf", "building": "N/A",
-        "associatedReports": [
-            { name: "Flow Dashboard V9", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-31", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Premier Nutrition", "building": "N/A",
-        "associatedReports": [
-            { name: "D920_Snapshot_Aging.xlsx", path: "2020_Snapshot_Aging.xlsx", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-32", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Dr. Scholls", "building": "N/A",
-        "associatedReports": [
-            { name: "DOD0101 Inventory Adjustments", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-33", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "T3 Home", "building": "N/A",
-        "associatedReports": [
-            { name: "T3 Micro Inventory", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-34", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Suave", "building": "N/A",
-        "associatedReports": [
-            { name: "Cycle Count Dashboard", path: "S:\\Accounts\\Suave\\Reporting\\Inventory", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-35", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Great Kitchens", "building": "N/A",
-        "associatedReports": [
-            { name: "Fill rate report", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-36", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Hippeas", "building": "N/A",
-        "associatedReports": [
-            { name: "Order Flow Dashboard", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-37", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "ODW Logistics", "building": "N/A",
-        "associatedReports": [
-            { name: "Order Accuracy", path: "", type: "Refreshable", tags: [] }
-        ]
-    },
-    {
-        "id": "account-38", "submissionDate": "N/A", "region": "N/A", "wms": "N/A", "accountType": "N/A", "customerSolutionType": [], "pickingMethods": [],
-        "numberOfShifts": "N/A", "foodGrade": false, "hazardousMaterials": false, "internationalShipping": false, "processesReturns": false, "temperatureControlled": false, "usesAutomation": false,
-        "customerSLAsText": "", "transportationConfig": [], "accountName": "Clipt", "building": "N/A",
-        "associatedReports": [
-            { name: "WMS Report", path: "", type: "Refreshable", tags: [] }
-        ]
+        id: 'std_inbound_outbound_volume',
+        name: 'Inbound/Outbound Volume',
+        type: 'Operational',
+        tags: ['Volume', 'Inbound', 'Outbound', 'Daily'],
+        defaultParameters: { frequency: 'Daily' },
+        matchingCriteria: {
+            // Apply to all operational accounts
+            accountType: ['Dedicated', 'Multi-Client', 'Cross-Dock']
+        },
+        description: 'Tracks the daily volume of incoming and outgoing shipments, providing a high-level view of facility throughput.'
     }
 ];
 
-// --- Global State and Utility Functions ---
-let currentFilters = {
-    reportMinFitScore: '',
-    reportTagSearch: '',
-    reportTypeFilter: '',
-    reportSortOrder: 'none',
-    wms: '',
-    accountType: '',
-    region: '',
-    customerSolutionType: [],
-    foodGrade: 'any',
-    hazardousMaterials: 'any',
-    internationalShipping: 'any',
-    processesReturns: 'any',
-    temperatureControlled: 'any',
-    usesAutomation: 'any',
-    groupBy: '',
-};
-let viewMode = 'accounts'; // 'accounts' or 'reports'
+document.addEventListener('DOMContentLoaded', () => {
+    initDb();
+    setupEventListeners();
+    updateView(); // Initial view update based on currentView
+});
 
-const predefinedSolutionTypes = ['DTC', 'ECOMM', 'Retail', 'Dropship', 'Pallet In/Out', 'B2B', 'B2C'].sort();
+function initDb() {
+    const request = indexedDB.open(DB_NAME, DB_VERSION);
 
-// Helper to get unique options for filters dynamically
-function getUniqueOptions() {
-    const wmsOptions = new Set();
-    const accountTypeOptions = new Set();
-    const regionOptions = new Set();
-    const reportTypeOptions = new Set();
+    request.onupgradeneeded = function(event) {
+        db = event.target.result;
+        if (!db.objectStoreNames.contains(STORE_NAME_ACCOUNTS)) {
+            const accountStore = db.createObjectStore(STORE_NAME_ACCOUNTS, { keyPath: 'id', autoIncrement: true });
+            accountStore.createIndex('name', 'accountName', { unique: false });
+            accountStore.createIndex('region', 'region', { unique: false });
+            accountStore.createIndex('wms', 'wms', { unique: false });
+            accountStore.createIndex('accountType', 'accountType', { unique: false });
+            accountStore.createIndex('customerSolutionType', 'customerSolutionType', { unique: false, multiEntry: true });
+            accountStore.createIndex('building', 'building', { unique: false });
+            accountStore.createIndex('foodGrade', 'foodGrade', { unique: false });
+            accountStore.createIndex('hazardousMaterials', 'hazardousMaterials', { unique: false });
+            accountStore.createIndex('internationalShipping', 'internationalShipping', { unique: false });
+            accountStore.createIndex('processesReturns', 'processesReturns', { unique: false });
+            accountStore.createIndex('temperatureControlled', 'temperatureControlled', { unique: false });
+            accountStore.createIndex('usesAutomation', 'usesAutomation', { unique: false });
+            // No need for a separate store for standardReports; they are hardcoded.
+            // Reports associated with accounts will be stored within the account object itself.
+        }
+    };
 
-    accounts.forEach(account => {
-        if (account.wms) wmsOptions.add(account.wms);
-        if (account.accountType) accountTypeOptions.add(account.accountType);
-        if (account.region) regionOptions.add(account.region);
-        account.associatedReports?.forEach(report => {
-            if (report.type) reportTypeOptions.add(report.type);
-        });
-    });
+    request.onsuccess = function(event) {
+        db = event.target.result;
+        console.log('IndexedDB opened successfully');
+        loadAllAccounts(); // Load accounts after DB is ready
+        populateFilterOptions();
+    };
 
-    return {
-        wms: [...wmsOptions].sort(),
-        accountType: [...accountTypeOptions].sort(),
-        region: [...regionOptions].sort(),
-        customerSolutionType: predefinedSolutionTypes, // Use predefined list
-        reportType: [...reportTypeOptions].sort(),
+    request.onerror = function(event) {
+        console.error('IndexedDB error:', event.target.errorCode);
+        showMessage('Error opening database. Some features may not work.', 'error');
     };
 }
 
-// --- Helper function to calculate report fit score ---
-function calculateReportFitScore(reportName, currentAccountId, allAccounts) {
-    let score = 0;
-    const currentAccount = allAccounts.find(acc => acc.id === currentAccountId);
-    if (!currentAccount) return 0;
-
-    allAccounts.forEach(otherAccount => {
-        if (otherAccount.id === currentAccountId) return; // Don't compare with self
-
-        // Check if this other account uses the same report
-        const usesSameReport = otherAccount.associatedReports?.some(
-            r => r.name === reportName
-        );
-
-        if (usesSameReport) {
-            let hasSimilarCharacteristic = false;
-
-            // Check for matching region
-            if (currentAccount.region && currentAccount.region === otherAccount.region) {
-                hasSimilarCharacteristic = true;
-            }
-            // Check for matching WMS
-            if (!hasSimilarCharacteristic && currentAccount.wms && currentAccount.wms === otherAccount.wms) {
-                hasSimilarCharacteristic = true;
-            }
-            // Check for matching accountType
-            if (!hasSimilarCharacteristic && currentAccount.accountType && currentAccount.accountType === otherAccount.accountType) {
-                hasSimilarCharacteristic = true;
-            }
-            // Check for overlapping customerSolutionType
-            if (!hasSimilarCharacteristic && currentAccount.customerSolutionType && otherAccount.customerSolutionType) {
-                if (currentAccount.customerSolutionType.some(type1 =>
-                    otherAccount.customerSolutionType.includes(type1)
-                )) {
-                    hasSimilarCharacteristic = true;
-                }
-            }
-            // Check for overlapping pickingMethods
-            if (!hasSimilarCharacteristic && currentAccount.pickingMethods && otherAccount.pickingMethods) {
-                if (currentAccount.pickingMethods.some(method1 =>
-                    otherAccount.pickingMethods.includes(method1)
-                )) {
-                    hasSimilarCharacteristic = true;
-                }
-            }
-            // Check for overlapping transportationConfig
-            if (!hasSimilarCharacteristic && currentAccount.transportationConfig && otherAccount.transportationConfig) {
-                if (currentAccount.transportationConfig.some(config1 =>
-                    otherAccount.transportationConfig.includes(config1)
-                )) {
-                    hasSimilarCharacteristic = true;
-                }
-            }
-            // Check for matching foodGrade
-            if (!hasSimilarCharacteristic && currentAccount.foodGrade === true && otherAccount.foodGrade === true) {
-                hasSimilarCharacteristic = true;
-            }
-            // Check for matching hazardousMaterials
-            if (!hasSimilarCharacteristic && currentAccount.hazardousMaterials === true && otherAccount.hazardousMaterials === true) {
-                hasSimilarCharacteristic = true;
-            }
-            // Check for matching internationalShipping
-            if (!hasSimilarCharacteristic && currentAccount.internationalShipping === true && otherAccount.internationalShipping === true) {
-                hasSimilarCharacteristic = true;
-            }
-            // Check for matching processesReturns
-            if (!hasSimilarCharacteristic && currentAccount.processesReturns === true && otherAccount.processesReturns === true) {
-                hasSimilarCharacteristic = true;
-            }
-            // Check for matching temperatureControlled
-            if (!hasSimilarCharacteristic && currentAccount.temperatureControlled === true && otherAccount.temperatureControlled === true) {
-                hasSimilarCharacteristic = true;
-            }
-            // Check for matching usesAutomation
-            if (!hasSimilarCharacteristic && currentAccount.usesAutomation === true && otherAccount.usesAutomation === true) {
-                hasSimilarCharacteristic = true;
-            }
-
-
-            if (hasSimilarCharacteristic) {
-                score++;
-            }
-        }
-    });
-    return Math.min(5, score); // Cap the score at 5
+function getObjectStore(storeName, mode) {
+    const transaction = db.transaction([storeName], mode);
+    return transaction.objectStore(storeName);
 }
 
-// --- Utility functions for populating select elements ---
-function populateSelectOptions(selectId, options, selectedValue) {
-    const selectElement = document.getElementById(selectId);
-    if (!selectElement) return;
-    selectElement.innerHTML = `<option value="">All</option>`;
-    options.forEach(optionValue => {
-        const option = document.createElement('option');
-        option.value = optionValue;
-        option.textContent = optionValue;
-        if (selectedValue === optionValue) {
-            option.selected = true;
-        }
-        selectElement.appendChild(option);
-    });
-}
+// --- Report Suggestion Logic ---
 
-function populateMultiSelectOptions(selectId, options, selectedValues) {
-    const selectElement = document.getElementById(selectId);
-    if (!selectElement) return;
-    selectElement.innerHTML = ''; // Clear existing options
+/**
+ * Checks if an account's properties match the criteria of a standard report.
+ * @param {Object} account - The account object.
+ * @param {Object} criteria - The matching criteria from a standard report.
+ * @returns {boolean} True if the account matches, false otherwise.
+ */
+function doesAccountMatchCriteria(account, criteria) {
+    for (const key in criteria) {
+        if (!criteria.hasOwnProperty(key)) continue;
 
-    options.forEach(optionValue => {
-        const option = document.createElement('option');
-        option.value = optionValue;
-        option.textContent = optionValue;
-        if (selectedValues.includes(optionValue)) {
-            option.selected = true;
-        }
-        selectElement.appendChild(option);
-    });
-}
+        const criterionValue = criteria[key];
+        const accountValue = account[key];
 
-// Function to update the active state of boolean filter buttons
-function updateBooleanFilterButtons() {
-    document.querySelectorAll('[data-filter-name]').forEach(button => {
-        const filterName = button.dataset.filterName;
-        const filterValue = button.dataset.filterValue;
-        if (currentFilters[filterName] === filterValue) {
-            button.classList.add('btn-blue');
-            button.classList.remove('btn-secondary');
-        } else {
-            button.classList.remove('btn-blue');
-            button.classList.add('btn-secondary');
-        }
-    });
-}
-
-// --- Rendering Functions ---
-
-function renderBoolean(value) {
-    return value ? `<span class="text-orange-600 font-bold">✓</span>` : `<span class="text-red-600 font-bold">✗</span>`;
-}
-
-function renderReportItem(report, accountId, reportIndex, showAccountName, calculatedFitScore, onRemoveReportCallback, onUpdateReportCallback) {
-    const reportHtml = `
-        <li class="bg-gray-50 p-3 rounded-md mb-2 border border-gray-200 report-item-card">
-            <div class="flex items-center justify-between mb-1">
-                <span class="font-medium text-gray-800">${report.name}</span>
-                ${onRemoveReportCallback ? `<button class="ml-2 btn-red-outline text-xs font-semibold px-2 py-1" data-action="removeReport" data-account-id="${accountId}" data-report-index="${reportIndex}">Remove</button>` : ''}
-            </div>
-            ${showAccountName && report.accountName ? `<p class="text-xs text-gray-600 mb-1"><span class="font-semibold">Account:</span> ${report.accountName}</p>` : ''}
-            ${report.path ? `<p class="text-xs text-gray-500 italic">Path: ${report.path}</p>` : ''}
-
-            <div class="grid grid-cols-1 md:grid-cols-3 gap-2 mt-2">
-                <div>
-                    <label for="report-type-${accountId}-${reportIndex}" class="block text-xs font-medium text-gray-600">Type:</label>
-                    <input type="text" id="report-type-${accountId}-${reportIndex}" value="${report.type || ''}"
-                        class="w-full p-1 border border-gray-300 rounded-md text-xs" placeholder="e.g., Adjunct, Refreshable"
-                        data-account-id="${accountId}" data-report-index="${reportIndex}" data-field="type" data-type="text" />
-                </div>
-                <div>
-                    <label for="report-fitscore-${accountId}-${reportIndex}" class="block text-xs font-medium text-gray-600">Fit Score (1-5):</label>
-                    <input type="number" id="report-fitscore-${accountId}-${reportIndex}" value="${calculatedFitScore !== undefined ? calculatedFitScore : ''}"
-                        class="w-full p-1 border border-gray-300 rounded-md text-xs bg-gray-100 cursor-not-allowed" readonly />
-                </div>
-                <div>
-                    <label for="report-tags-${accountId}-${reportIndex}" class="block text-xs font-medium text-gray-600">Tags (comma-sep):</label>
-                    <input type="text" id="report-tags-${accountId}-${reportIndex}" value="${report.tags.join(', ') || ''}"
-                        class="w-full p-1 border border-gray-300 rounded-md text-xs" placeholder="e.g., Critical, Daily"
-                        data-account-id="${accountId}" data-report-index="${reportIndex}" data-field="tags" data-type="text" />
-                </div>
-            </div>
-        </li>
-    `;
-    const div = document.createElement('div');
-    div.innerHTML = reportHtml;
-    return div.firstElementChild;
-}
-
-
-function renderAccountCard(account, onUpdateAccountCallback, onRemoveReportCallback, onUpdateReportCallback, allAccounts) {
-    const uniqueOptions = getUniqueOptions(); // Get unique options for select fields
-
-    // Calculate fit scores for all reports in this account
-    const reportsWithCalculatedFitScores = (account.associatedReports || []).map(report => ({
-        ...report,
-        fitScore: calculateReportFitScore(report.name, account.id, allAccounts)
-    }));
-
-    // Sort reports based on selected order
-    const sortedReports = [...reportsWithCalculatedFitScores].sort((a, b) => {
-        const sortOrder = document.querySelector(`select[data-account-id="${account.id}"][data-action="sortReports"]`)?.value || 'none';
-        const scoreA = a.fitScore || 0;
-        const scoreB = b.fitScore || 0;
-        if (sortOrder === 'asc') return scoreA - scoreB;
-        if (sortOrder === 'desc') return scoreB - scoreA;
-        return 0; // Default order
-    });
-
-
-    const accountHtml = `
-        <div class="bg-white p-4 rounded-lg shadow-md mb-4 border border-gray-200 account-card">
-            <h3 class="text-xl font-bold text-gray-900 mb-2">
-                <input type="text" name="accountName" value="${account.accountName || ''}" class="font-bold text-gray-900 w-full p-1 border rounded-md" data-account-id="${account.id}" data-field="accountName" data-type="text" />
-            </h3>
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-2 text-sm text-gray-700">
-                <p>
-                    <span class="font-semibold">Region:</span>
-                    <input type="text" name="region" value="${account.region || ''}" class="w-full p-1 border rounded-md" data-account-id="${account.id}" data-field="region" data-type="text" />
-                </p>
-                <p>
-                    <span class="font-semibold">Building:</span>
-                    <input type="text" name="building" value="${account.building || ''}" class="w-full p-1 border rounded-md" data-account-id="${account.id}" data-field="building" data-type="text" />
-                </p>
-                <p>
-                    <span class="font-semibold">WMS:</span>
-                    <input type="text" name="wms" value="${account.wms || ''}" class="w-full p-1 border rounded-md" data-account-id="${account.id}" data-field="wms" data-type="text" />
-                </p>
-                <p>
-                    <span class="font-semibold">Account Type:</span>
-                    <input type="text" name="accountType" value="${account.accountType || ''}" class="w-full p-1 border rounded-md" data-account-id="${account.id}" data-field="accountType" data-type="text" />
-                </p>
-                <p>
-                    <span class="font-semibold">Solution Type:</span>
-                    <select name="customerSolutionType" multiple class="w-full p-1 border rounded-md h-20" data-account-id="${account.id}" data-field="customerSolutionType" data-type="multiselect">
-                        ${uniqueOptions.customerSolutionType.map(option => `<option value="${option}" ${account.customerSolutionType?.includes(option) ? 'selected' : ''}>${option}</option>`).join('')}
-                    </select>
-                </p>
-                <p>
-                    <span class="font-semibold">Picking Methods:</span> ${account.pickingMethods?.join(', ') || 'N/A'}
-                </p>
-                <p>
-                    <span class="font-semibold">Shifts:</span>
-                    <input type="number" name="numberOfShifts" value="${account.numberOfShifts || ''}" class="w-full p-1 border rounded-md" data-account-id="${account.id}" data-field="numberOfShifts" data-type="number" />
-                </p>
-
-                <div class="col-span-full grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-2 mt-2">
-                    <label class="flex items-center space-x-2 text-sm text-gray-700">
-                        <input type="checkbox" name="foodGrade" ${account.foodGrade ? 'checked' : ''} class="rounded text-indigo-600 focus:ring-indigo-500" data-account-id="${account.id}" data-field="foodGrade" data-type="checkbox" />
-                        <span>Food Grade</span>
-                    </label>
-                    <label class="flex items-center space-x-2 text-sm text-gray-700">
-                        <input type="checkbox" name="hazardousMaterials" ${account.hazardousMaterials ? 'checked' : ''} class="rounded text-indigo-600 focus:ring-indigo-500" data-account-id="${account.id}" data-field="hazardousMaterials" data-type="checkbox" />
-                        <span>Hazardous Materials</span>
-                    </label>
-                    <label class="flex items-center space-x-2 text-sm text-gray-700">
-                        <input type="checkbox" name="internationalShipping" ${account.internationalShipping ? 'checked' : ''} class="rounded text-indigo-600 focus:ring-indigo-500" data-account-id="${account.id}" data-field="internationalShipping" data-type="checkbox" />
-                        <span>International Shipping</span>
-                    </label>
-                    <label class="flex items-center space-x-2 text-sm text-gray-700">
-                        <input type="checkbox" name="processesReturns" ${account.processesReturns ? 'checked' : ''} class="rounded text-indigo-600 focus:ring-indigo-500" data-account-id="${account.id}" data-field="processesReturns" data-type="checkbox" />
-                        <span>Processes Returns</span>
-                    </label>
-                    <label class="flex items-center space-x-2 text-sm text-gray-700">
-                        <input type="checkbox" name="temperatureControlled" ${account.temperatureControlled ? 'checked' : ''} class="rounded text-indigo-600 focus:ring-indigo-500" data-account-id="${account.id}" data-field="temperatureControlled" data-type="checkbox" />
-                        <span>Temp. Controlled</span>
-                    </label>
-                    <label class="flex items-center space-x-2 text-sm text-gray-700">
-                        <input type="checkbox" name="usesAutomation" ${account.usesAutomation ? 'checked' : ''} class="rounded text-indigo-600 focus:ring-indigo-500" data-account-id="${account.id}" data-field="usesAutomation" data-type="checkbox" />
-                        <span>Uses Automation</span>
-                    </label>
-                </div>
-            </div>
-
-            <div class="mt-3 text-sm text-gray-600">
-                <p class="font-semibold">Customer SLAs:</p>
-                <textarea name="customerSLAsText" class="w-full p-1 border rounded-md resize-y" rows="3" data-account-id="${account.id}" data-field="customerSLAsText" data-type="textarea">${account.customerSLAsText || ''}</textarea>
-            </div>
-            <div class="mt-3 text-sm text-gray-600">
-                <p class="font-semibold">Transportation Config (comma-sep):</p>
-                <textarea name="transportationConfig" class="w-full p-1 border rounded-md resize-y" rows="2" data-account-id="${account.id}" data-field="transportationConfig" data-type="textarea-csv">${account.transportationConfig?.join(', ') || ''}</textarea>
-            </div>
-
-            <div class="mt-4">
-                <div class="flex justify-between items-center mb-2">
-                    <p class="font-semibold text-gray-700">Associated Reports:</p>
-                    <select class="text-xs p-1 border rounded-md" data-account-id="${account.id}" data-action="sortReports">
-                        <option value="none">Sort by: Default</option>
-                        <option value="desc">Sort by: Fit Score (High to Low)</option>
-                        <option value="asc">Sort by: Fit Score (Low to High)</option>
-                    </select>
-                </div>
-                <ul class="list-none pl-0" data-reports-list="${account.id}">
-                    </ul>
-            </div>
-        </div>
-    `;
-    const div = document.createElement('div');
-    div.innerHTML = accountHtml;
-    return div.firstElementChild;
-}
-
-function renderContent() {
-    const contentDisplay = document.getElementById('contentDisplay');
-    contentDisplay.innerHTML = ''; // Clear previous content
-
-    const uniqueOptions = getUniqueOptions(); // Refresh options for filters
-
-    // Update filter dropdowns
-    populateSelectOptions('filterRegion', uniqueOptions.region, currentFilters.region);
-    populateSelectOptions('filterWMS', uniqueOptions.wms, currentFilters.wms);
-    populateSelectOptions('filterAccountType', uniqueOptions.accountType, currentFilters.accountType);
-    populateMultiSelectOptions('filterCustomerSolutionType', uniqueOptions.customerSolutionType, currentFilters.customerSolutionType);
-    populateSelectOptions('filterReportType', uniqueOptions.reportType, currentFilters.reportTypeFilter);
-
-    // Update Add New Report Account dropdown
-    const selectAccountForReport = document.getElementById('selectAccountForReport');
-    selectAccountForReport.innerHTML = '<option value="">-- Select an Account --</option>';
-    accounts.forEach(account => {
-        const option = document.createElement('option');
-        option.value = account.id;
-        option.textContent = account.accountName;
-        selectAccountForReport.appendChild(option);
-    });
-
-
-    let filteredAccounts = accounts.filter(account => {
-        // Account-level filters
-        if (currentFilters.wms && account.wms && account.wms !== currentFilters.wms) return false;
-        if (currentFilters.accountType && account.accountType && account.accountType !== currentFilters.accountType) return false;
-        if (currentFilters.region && account.region && account.region !== currentFilters.region) return false;
-
-        // Customer Solution Type Filter (multi-select)
-        if (currentFilters.customerSolutionType.length > 0) {
-            const selectedSolutionTypes = currentFilters.customerSolutionType;
-            if (!account.customerSolutionType || !selectedSolutionTypes.some(s => account.customerSolutionType.includes(s))) {
+        if (typeof criterionValue === 'boolean') {
+            if (accountValue !== criterionValue) {
                 return false;
             }
-        }
-
-        // Boolean Filters
-        const booleanFields = [
-            "foodGrade", "hazardousMaterials", "internationalShipping",
-            "processesReturns", "temperatureControlled", "usesAutomation"
-        ];
-        for (const field of booleanFields) {
-            if (currentFilters[field] !== 'any') {
-                const filterValue = currentFilters[field] === 'yes';
-                if (account[field] !== filterValue) {
+        } else if (Array.isArray(criterionValue)) {
+            // Check if accountValue (or any part of it if comma-separated) is in the criterion array
+            if (typeof accountValue === 'string') {
+                const accountValuesArray = accountValue.split(',').map(s => s.trim());
+                if (!criterionValue.some(c => accountValuesArray.includes(c))) {
+                    return false;
+                }
+            } else if (!criterionValue.includes(accountValue)) {
+                return false;
+            }
+        } else if (typeof criterionValue === 'object' && criterionValue !== null) {
+            // Handle specific object criteria like { min: X }, { exists: true }
+            if (criterionValue.min !== undefined) {
+                if (typeof accountValue !== 'number' || accountValue < criterionValue.min) {
                     return false;
                 }
             }
-        }
-
-        // Report-level filters applied to accounts: An account passes if *any* of its reports match the report filters
-        const isReportFilterActive = currentFilters.reportMinFitScore !== '' || currentFilters.reportTagSearch !== '' || currentFilters.reportTypeFilter !== '';
-        if (isReportFilterActive) {
-            const hasMatchingReport = account.associatedReports?.some(report => {
-                const calculatedFitScore = calculateReportFitScore(report.name, account.id, accounts);
-
-                if (currentFilters.reportMinFitScore !== '' && (calculatedFitScore === null || calculatedFitScore < parseInt(currentFilters.reportMinFitScore, 10))) {
-                    return false;
-                }
-                if (currentFilters.reportTagSearch) {
-                    const searchTags = currentFilters.reportTagSearch.toLowerCase().split(',').map(tag => tag.trim()).filter(tag => tag !== '');
-                    const reportTags = report.tags?.map(tag => tag.toLowerCase()) || [];
-                    if (!searchTags.some(sTag => reportTags.includes(sTag))) {
-                        return false;
-                    }
-                }
-                if (currentFilters.reportTypeFilter && report.type !== currentFilters.reportTypeFilter) {
-                    return false;
-                }
-                return true;
-            });
-            if (!hasMatchingReport) {
-                return false;
-            }
-        }
-        return true;
-    });
-
-    if (viewMode === 'accounts') {
-        document.getElementById('accountFiltersContainer').style.display = 'contents';
-        document.getElementById('groupByContainer').style.display = 'block';
-        document.getElementById('reportSortContainer').style.display = 'none';
-
-        let groupedAccounts = {};
-        if (!currentFilters.groupBy) {
-            groupedAccounts['All Accounts'] = filteredAccounts;
-        } else {
-            filteredAccounts.forEach(account => {
-                let groupKey = account[currentFilters.groupBy];
-                if (Array.isArray(groupKey)) {
-                    groupKey = groupKey.join(', ') || 'Uncategorized';
-                } else if (!groupKey) {
-                    groupKey = 'Uncategorized';
-                }
-                if (!groupedAccounts[groupKey]) {
-                    groupedAccounts[groupKey] = [];
-                }
-                groupedAccounts[groupKey].push(account);
-            });
-        }
-
-        if (Object.keys(groupedAccounts).length > 0) {
-            for (const groupName in groupedAccounts) {
-                const groupDiv = document.createElement('div');
-                groupDiv.className = 'mb-8';
-                groupDiv.innerHTML = `
-                    <h2 class="text-2xl font-bold text-gray-800 mb-4 border-b pb-2">
-                        ${currentFilters.groupBy ? `${currentFilters.groupBy}: ` : ''}${groupName} (${groupedAccounts[groupName].length} Accounts)
-                    </h2>
-                    <div class="grid grid-cols-1 gap-6" data-group-content></div>
-                `;
-                const groupContent = groupDiv.querySelector('[data-group-content]');
-                groupedAccounts[groupName].forEach(account => {
-                    groupContent.appendChild(renderAccountCard(account, updateAccount, removeReport, updateReport, accounts));
-                });
-                contentDisplay.appendChild(groupDiv);
-            }
-        } else {
-            contentDisplay.innerHTML = `<p class="text-center text-gray-600 text-lg">No accounts match your current filters.</p>`;
-        }
-
-    } else { // viewMode === 'reports'
-        document.getElementById('accountFiltersContainer').style.display = 'none';
-        document.getElementById('groupByContainer').style.display = 'none';
-        document.getElementById('reportSortContainer').style.display = 'block';
-
-        let allReportsFlat = [];
-        accounts.forEach(account => {
-            account.associatedReports?.forEach((report, index) => {
-                allReportsFlat.push({
-                    ...report,
-                    accountId: account.id,
-                    reportIndex: index,
-                    accountName: account.accountName,
-                    fitScore: calculateReportFitScore(report.name, account.id, accounts)
-                });
-            });
-        });
-
-        let filteredReportsForView = allReportsFlat.filter(report => {
-            if (currentFilters.reportMinFitScore !== '' && (report.fitScore === null || report.fitScore < parseInt(currentFilters.reportMinFitScore, 10))) {
-                return false;
-            }
-            if (currentFilters.reportTagSearch) {
-                const searchTags = currentFilters.reportTagSearch.toLowerCase().split(',').map(tag => tag.trim()).filter(tag => tag !== '');
-                const reportTags = report.tags?.map(tag => tag.toLowerCase()) || [];
-                if (!searchTags.some(sTag => reportTags.includes(sTag))) {
+            if (criterionValue.max !== undefined) {
+                if (typeof accountValue !== 'number' || accountValue > criterionValue.max) {
                     return false;
                 }
             }
-            if (currentFilters.reportTypeFilter && report.type !== currentFilters.reportTypeFilter) {
+            if (criterionValue.exists !== undefined) {
+                if (criterionValue.exists && (!accountValue || accountValue === '' || (Array.isArray(accountValue) && accountValue.length === 0))) {
+                    return false;
+                }
+                if (!criterionValue.exists && accountValue && accountValue !== '' && !(Array.isArray(accountValue) && accountValue.length === 0)) {
+                    return false;
+                }
+            }
+        } else {
+            // Simple direct match for strings
+            if (accountValue !== criterionValue) {
                 return false;
             }
-            return true;
-        });
-
-        if (currentFilters.reportSortOrder === 'asc') {
-            filteredReportsForView.sort((a, b) => (a.fitScore || 0) - (b.fitScore || 0));
-        } else if (currentFilters.reportSortOrder === 'desc') {
-            filteredReportsForView.sort((a, b) => (b.fitScore || 0) - (a.fitScore || 0));
-        }
-
-        if (filteredReportsForView.length > 0) {
-            const reportsViewDiv = document.createElement('div');
-            reportsViewDiv.className = 'mb-8';
-            reportsViewDiv.innerHTML = `
-                <h2 class="text-2xl font-bold text-gray-800 mb-4 border-b pb-2">
-                    All Reports (${filteredReportsForView.length})
-                </h2>
-                <div class="grid grid-cols-1 md:grid-cols-2 gap-6" id="allReportsList"></div>
-            `;
-            const allReportsList = reportsViewDiv.querySelector('#allReportsList');
-            filteredReportsForView.forEach(report => {
-                allReportsList.appendChild(renderReportItem(report, report.accountId, report.reportIndex, true, report.fitScore, removeReport, updateReport));
-            });
-            contentDisplay.appendChild(reportsViewDiv);
-        } else {
-            contentDisplay.innerHTML = `<p class="text-center text-gray-600 text-lg">No reports match your current filters.</p>`;
         }
     }
-    updateBooleanFilterButtons(); // Ensure boolean filter buttons reflect current state
+    return true;
 }
 
-// --- State Update Handlers (mimicking React state updates) ---
-function updateAccounts(newAccounts) {
-    accounts = newAccounts;
-    renderContent();
-}
-
-function updateAccount(id, updatedFields) {
-    const newAccounts = accounts.map(account =>
-        account.id === id ? { ...account, ...updatedFields } : account
-    );
-    updateAccounts(newAccounts);
-}
-
-function updateReport(accountId, reportIndex, updatedFields) {
-    const newAccounts = accounts.map(account => {
-        if (account.id === accountId) {
-            const updatedReports = account.associatedReports.map((report, idx) =>
-                idx === reportIndex ? { ...report, ...updatedFields } : report
-            );
-            return { ...account, associatedReports: updatedReports };
-        }
-        return account;
-    });
-    updateAccounts(newAccounts);
-}
-
-function removeReport(accountId, reportIndex) {
-    const newAccounts = accounts.map(account => {
-        if (account.id === accountId) {
-            const updatedReports = account.associatedReports.filter(
-                (_, idx) => idx !== reportIndex
-            );
-            return { ...account, associatedReports: updatedReports };
-        }
-        return account;
-    });
-    updateAccounts(newAccounts);
-}
-
-// --- Event Listeners and Initial Render ---
-// Global state for section visibility
-let showAddAccountsSection = true;
-let showAddReportsSection = true;
-let showFiltersSection = true;
-
-document.addEventListener('DOMContentLoaded', () => {
-    // Initial render
-    renderContent();
-
-    // View Mode Toggles
-    document.getElementById('viewAccountsBtn').addEventListener('click', () => {
-        viewMode = 'accounts';
-        document.getElementById('viewAccountsBtn').classList.add('btn-primary');
-        document.getElementById('viewAccountsBtn').classList.remove('btn-secondary');
-        document.getElementById('viewReportsBtn').classList.add('btn-secondary');
-        document.getElementById('viewReportsBtn').classList.remove('btn-primary');
-        renderContent();
-    });
-    document.getElementById('viewReportsBtn').addEventListener('click', () => {
-        viewMode = 'reports';
-        document.getElementById('viewReportsBtn').classList.add('btn-primary');
-        document.getElementById('viewReportsBtn').classList.remove('btn-secondary');
-        document.getElementById('viewAccountsBtn').classList.add('btn-secondary');
-        document.getElementById('viewAccountsBtn').classList.remove('btn-primary');
-        renderContent();
-    });
-
-    // Section Toggles
-    document.getElementById('toggleAddAccounts').addEventListener('click', () => {
-        const content = document.getElementById('addAccountsContent');
-        showAddAccountsSection = !showAddAccountsSection;
-        content.style.display = showAddAccountsSection ? 'block' : 'none';
-        document.getElementById('toggleAddAccounts').classList.toggle('expanded', showAddAccountsSection);
-    });
-    document.getElementById('toggleAddReports').addEventListener('click', () => {
-        const content = document.getElementById('addReportsContent');
-        showAddReportsSection = !showAddReportsSection;
-        content.style.display = showAddReportsSection ? 'block' : 'none';
-        document.getElementById('toggleAddReports').classList.toggle('expanded', showAddReportsSection);
-    });
-    document.getElementById('toggleFilters').addEventListener('click', () => {
-        const content = document.getElementById('filtersContent');
-        showFiltersSection = !showFiltersSection;
-        content.style.display = showFiltersSection ? 'block' : 'none';
-        document.getElementById('toggleFilters').classList.toggle('expanded', showFiltersSection);
-    });
-
-    // Manual Add Account
-    document.getElementById('addNewAccountBtn').addEventListener('click', () => {
-        const newId = `account-${accounts.length + 1}`;
-        const newAccount = {
-            id: newId,
-            submissionDate: new Date().toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' }),
-            accountName: document.getElementById('newAccountName').value,
-            region: document.getElementById('newAccountRegion').value,
-            wms: document.getElementById('newAccountWMS').value,
-            accountType: document.getElementById('newAccountType').value,
-            customerSolutionType: document.getElementById('newCustomerSolutionType').value.split(',').map(s => s.trim()).filter(s => s),
-            building: document.getElementById('newAccountBuilding').value,
-            numberOfShifts: document.getElementById('newNumberOfShifts').value,
-            foodGrade: document.getElementById('newFoodGrade').checked,
-            hazardousMaterials: document.getElementById('newHazardousMaterials').checked,
-            internationalShipping: document.getElementById('newInternationalShipping').checked,
-            processesReturns: document.getElementById('newProcessesReturns').checked,
-            temperatureControlled: document.getElementById('newTemperatureControlled').checked,
-            usesAutomation: document.getElementById('newUsesAutomation').checked,
-            customerSLAsText: document.getElementById('newCustomerSLAsText').value,
-            transportationConfig: document.getElementById('newTransportationConfig').value.split(',').map(s => s.trim()).filter(s => s),
-            pickingMethods: [],
-            associatedReports: [],
-        };
-        accounts.push(newAccount);
-        renderContent();
-        // Clear form
-        document.getElementById('newAccountName').value = '';
-        document.getElementById('newAccountRegion').value = '';
-        document.getElementById('newAccountWMS').value = '';
-        document.getElementById('newAccountType').value = '';
-        document.getElementById('newCustomerSolutionType').value = '';
-        document.getElementById('newAccountBuilding').value = '';
-        document.getElementById('newNumberOfShifts').value = '';
-        document.getElementById('newFoodGrade').checked = false;
-        document.getElementById('newHazardousMaterials').checked = false;
-        document.getElementById('newInternationalShipping').checked = false;
-        document.getElementById('newProcessesReturns').checked = false;
-        document.getElementById('newTemperatureControlled').checked = false;
-        document.getElementById('newUsesAutomation').checked = false;
-        document.getElementById('newCustomerSLAsText').value = '';
-        document.getElementById('newTransportationConfig').value = '';
-    });
-
-    // Manual Add Report
-    document.getElementById('addNewReportBtn').addEventListener('click', () => {
-        const accountId = document.getElementById('selectAccountForReport').value;
-        const reportName = document.getElementById('newReportName').value;
-        const reportPath = document.getElementById('newReportPath').value;
-        const reportType = document.getElementById('newReportType').value;
-        const reportTags = document.getElementById('newReportTags').value;
-
-        if (accountId && reportName.trim()) {
-            const newReport = {
-                name: reportName.trim(),
-                path: reportPath.trim(),
-                type: reportType.trim(),
-                tags: reportTags.split(',').map(tag => tag.trim()).filter(tag => tag !== ''),
+/**
+ * Suggests reports for a given account based on predefined criteria.
+ * @param {Object} account - The account object for which to suggest reports.
+ * @returns {Array} An array of suggested report objects (copies of standard reports with default parameters).
+ */
+function suggestReportsForAccount(account) {
+    const suggestions = [];
+    standardReports.forEach(stdReport => {
+        if (doesAccountMatchCriteria(account, stdReport.matchingCriteria)) {
+            const suggestedReport = {
+                id: stdReport.id, // Keep the standard ID for reference
+                name: stdReport.name,
+                type: stdReport.type,
+                tags: [...stdReport.tags], // Clone array
+                reportPath: '', // Default empty path
+                parameters: { ...stdReport.defaultParameters }, // Clone default parameters
+                suggested: true, // Flag to indicate it's a suggestion
+                uniqueId: `temp_${Date.now()}_${Math.random().toString(36).substring(2, 9)}` // Unique ID for temporary UI management
             };
-            const account = accounts.find(acc => acc.id === accountId);
-            if (account) {
-                account.associatedReports.push(newReport);
-                renderContent();
-                // Clear form
-                document.getElementById('selectAccountForReport').value = '';
-                document.getElementById('newReportName').value = '';
-                document.getElementById('newReportPath').value = '';
-                document.getElementById('newReportType').value = '';
-                document.getElementById('newReportTags').value = '';
-            } else {
-                console.warn("Selected account not found.");
-            }
-        } else {
-            console.warn("Please select an account and enter a report name.");
+            suggestions.push(suggestedReport);
         }
     });
+    return suggestions;
+}
 
-    // CSV Upload for Accounts
-    document.getElementById('accountCsvUpload').addEventListener('change', (event) => {
-        const file = event.target.files[0];
-        if (!file) return;
+// --- UI Functions for Suggested Reports ---
 
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const text = e.target.result;
-            const lines = text.split('\n').filter(line => line.trim() !== '');
-            if (lines.length < 2) {
-                console.error("CSV file is empty or malformed.");
-                return;
-            }
+/**
+ * Displays the suggested reports to the user.
+ * @param {Array} suggestedReports - Reports suggested for the new account.
+ * @param {Object} accountData - The temporary account data.
+ */
+function displaySuggestedReportsUI(suggestedReports, accountData) {
+    const suggestedReportsSection = document.getElementById('suggestedReportsSection');
+    const suggestedReportsList = document.getElementById('suggestedReportsList');
+    suggestedReportsList.innerHTML = ''; // Clear previous suggestions
 
-            const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-            const newAccounts = [];
+    currentEditedAccount = { ...accountData, associatedReports: [] }; // Initialize with an empty array for accepted reports
+    currentEditedAccount.tempSuggestedReports = suggestedReports.map(r => ({ ...r })); // Store a mutable copy of suggestions
 
-            const csvHeaderMap = {
-                "Submission Date": "submissionDate",
-                "Select the Region of the Account:": "region",
-                "What WMS does this account use?": "wms",
-                "Account Type?": "accountType",
-                "Customer Solution Type?": "customerSolutionType",
-                "Picking Methods?": "pickingMethods",
-                "Number of Shifts": "numberOfShifts",
-                "Does this account handle food-grade products or require food-grade compliance (e.g., sanitation standards, temperature control, FDA regulations)?": "foodGrade",
-                "Does this account store hazardous materials?": "hazardousMaterials",
-                "Does this account ship or receive internationally?": "internationalShipping",
-                "Does this account process returns?": "processesReturns",
-                "Does this account use temperature-controlled space?": "temperatureControlled",
-                "Does this account use automation (e.g. conveyor system, robotics)?": "usesAutomation",
-                "Please enter your customer SLAs and their required metric": "customerSLAsText",
-                "Transportation Configuration": "transportationConfig",
-            };
+    if (suggestedReports.length === 0) {
+        suggestedReportsList.innerHTML = '<p class="text-gray-600 col-span-full">No standard reports were automatically suggested based on this account\'s characteristics.</p>';
+    }
 
-            const buildingAccountColumns = [
-                "Select the Account in the Building Ontario", "Select the Account in the Building Ontario 2",
-                "Select the Account in the Building Redlands 1", "Select the Account in the Building Redlands 1 Overflow",
-                "Select the Account in the Building Redlands 2", "Select the Account in the Building Bristol 3",
-                "Select the Account in the Building Bristol Buffer", "Select the Account in the Building Melrose Park",
-                "Select the Account in the Building Romeoville 1", "Select the Account in the Building Romeoville 2",
-                "Select the Account in the Building Waukesha", "Select the Account in the Building DC01:",
-                "Select the Account in the Building DC02:", "Select the Account in the Building DC03:",
-                "Select the Account in the Building DC04:", "Select the Account in the Building DC05:",
-                "Select the Account in the Building DC06:", "Select the Account in the Building DC07:",
-                "Select the Account in the Building DC08:", "Select the Account in the Building DC10:",
-                "Select the Account in the Building DC11:", "Select the Account in the Building DC12:",
-                "Select the Account in the Building DC13:", "Select the Account in the Building DC14:",
-                "Select the Account in the Building DC15:", "Select the Account in the Building Dist-Trans:",
-                "Select the Account in the Building Englewood 1:", "Select the Account in the Building Hamilton:",
-                "Select the Account in the Building Jackson:", "Select the Account in the Building Lockbourne 1:",
-                "Select the Account in the Building Lockbourne 3:", "Select the Account in the Building McDonough:",
-                "Select the Account in the Building Memphis:", "Select the Account in the Building Rickenbacker:",
-                "Select the Account in the Building Rickenbacker 1:",
-            ];
-
-            for (let i = 1; i < lines.length; i++) {
-                const values = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(v => v.trim().replace(/"/g, ''));
-                const account = { id: `account-${accounts.length + newAccounts.length + i}`, associatedReports: [] };
-
-                let foundAccountName = '';
-                let foundBuilding = '';
-
-                headers.forEach((header, index) => {
-                    const key = csvHeaderMap[header];
-                    const value = values[index] || '';
-
-                    if (buildingAccountColumns.includes(header) && value) {
-                        foundAccountName = value;
-                        const match = header.match(/Building (.+):?$/);
-                        if (match && match[1]) {
-                            foundBuilding = match[1].replace('Select the Account in the ', '').trim();
-                        } else {
-                            foundBuilding = value;
-                        }
-                    } else if (key) {
-                        if (['customerSolutionType', 'pickingMethods', 'transportationConfig'].includes(key)) {
-                            account[key] = value.split(/[\n,]/).map(s => s.trim()).filter(s => s);
-                        } else if (['foodGrade', 'hazardousMaterials', 'internationalShipping', 'processesReturns', 'temperatureControlled', 'usesAutomation'].includes(key)) {
-                            account[key] = value.toLowerCase() === 'yes';
-                        } else {
-                            account[key] = value;
-                        }
-                    }
-                });
-                account.accountName = foundAccountName;
-                account.building = foundBuilding;
-                newAccounts.push(account);
-            }
-            accounts.push(...newAccounts);
-            renderContent();
-            event.target.value = null; // Clear the file input
-        };
-        reader.readAsText(file);
+    currentEditedAccount.tempSuggestedReports.forEach(report => {
+        const reportCard = document.createElement('div');
+        reportCard.id = `suggested-report-${report.uniqueId}`;
+        reportCard.className = 'bg-white p-4 rounded-lg shadow border border-indigo-100 flex flex-col justify-between';
+        reportCard.innerHTML = `
+            <div>
+                <h4 class="font-semibold text-lg text-indigo-700 mb-2">${report.name} <span class="text-sm text-gray-500">(${report.type})</span></h4>
+                <p class="text-sm text-gray-600 mb-2">Tags: ${report.tags.join(', ')}</p>
+                <div class="report-parameters-display text-sm text-gray-700">
+                    <p><strong>Parameters:</strong></p>
+                    ${Object.entries(report.parameters).map(([key, value]) => `<p class="ml-2">${key}: <span class="font-medium">${value || 'N/A'}</span></p>`).join('')}
+                </div>
+                <div id="parameters-editor-${report.uniqueId}" class="mt-3 p-3 bg-gray-50 rounded hidden">
+                    <h5 class="font-medium text-gray-800 mb-2">Edit Parameters</h5>
+                    ${renderParameterInputs(report.parameters, report.uniqueId)}
+                    <button class="btn btn-primary btn-sm mt-2 save-params-btn" data-report-uid="${report.uniqueId}">Save Parameters</button>
+                    <button class="btn btn-secondary btn-sm mt-2 cancel-params-btn" data-report-uid="${report.uniqueId}">Cancel</button>
+                </div>
+            </div>
+            <div class="mt-4 flex flex-wrap gap-2">
+                <button class="btn btn-blue btn-sm accept-suggestion-btn" data-report-uid="${report.uniqueId}" ${report.accepted ? 'disabled' : ''}>${report.accepted ? 'Accepted' : 'Add Report'}</button>
+                <button class="btn btn-orange btn-sm customize-params-btn" data-report-uid="${report.uniqueId}">Customize</button>
+                <button class="btn btn-red btn-sm remove-suggestion-btn" data-report-uid="${report.uniqueId}">Remove</button>
+            </div>
+        `;
+        suggestedReportsList.appendChild(reportCard);
     });
 
-    // CSV Upload for Reports
-    document.getElementById('reportCsvUpload').addEventListener('change', (event) => {
-        const file = event.target.files[0];
-        if (!file) return;
+    suggestedReportsSection.classList.remove('hidden'); // Show the section
+    document.querySelector('.container > div:nth-child(4)').classList.add('hidden'); // Hide Add New Account
+    document.querySelector('.container > div:nth-child(5)').classList.add('hidden'); // Hide Add New Report
+    document.getElementById('searchBar').classList.add('hidden'); // Hide search bar
+    document.getElementById('toggleFilters').closest('.bg-gray-50').classList.add('hidden'); // Hide filters
+    document.getElementById('exportCsvBtn').classList.add('hidden'); // Hide export button
+    document.getElementById('viewAccountsBtn').classList.add('hidden'); // Hide view toggles
+    document.getElementById('viewReportsBtn').classList.add('hidden'); // Hide view toggles
 
-        const reader = new FileReader();
-        reader.onload = (e) => {
-            const text = e.target.result;
-            const lines = text.split('\n').filter(line => line.trim() !== '');
-            if (lines.length < 2) {
-                console.error("Report CSV file is empty or malformed.");
-                return;
-            }
+    addSuggestedReportListeners();
+}
 
-            const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''));
-            const reportsToAdd = [];
+/**
+ * Generates HTML input fields for report parameters.
+ * @param {Object} parameters - The parameters object for a report.
+ * @param {string} uniqueId - The unique ID of the report for element IDs.
+ * @returns {string} HTML string for parameter inputs.
+ */
+function renderParameterInputs(parameters, uniqueId) {
+    let html = '';
+    for (const key in parameters) {
+        if (parameters.hasOwnProperty(key)) {
+            const value = parameters[key];
+            let inputType = 'text';
+            if (typeof value === 'number') inputType = 'number';
+            // Add more type checks if needed (e.g., date, dropdowns for frequency)
 
-            const reportCsvHeaderMap = {
-                "Account ID": "accountId",
-                "Report Name": "name",
-                "Report Path": "path",
-                "Report Type": "type",
-                "Tags": "tags",
-            };
+            html += `
+                <div class="mb-2">
+                    <label for="param-${uniqueId}-${key}" class="block text-xs font-medium text-gray-700">${key.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}:</label>
+                    <input type="${inputType}" id="param-${uniqueId}-${key}" name="${key}" value="${value !== null ? value : ''}" class="mt-1 block w-full rounded-md border-gray-300 shadow-sm p-1 text-sm" />
+                </div>
+            `;
+        }
+    }
+    return html;
+}
 
-            for (let i = 1; i < lines.length; i++) {
-                const values = lines[i].split(/,(?=(?:(?:[^"]*"){2})*[^"]*$)/).map(v => v.trim().replace(/"/g, ''));
-                const reportData = {};
-
-                headers.forEach((header, index) => {
-                    const key = reportCsvHeaderMap[header];
-                    if (key) {
-                        let value = values[index] || '';
-                        if (key === 'tags') {
-                            reportData[key] = value.split(',').map(tag => tag.trim()).filter(tag => tag !== '');
-                        } else {
-                            reportData[key] = value;
-                        }
-                    }
-                });
-
-                if (reportData.accountId && reportData.name) {
-                    reportsToAdd.push(reportData);
-                } else {
-                    console.warn(`Skipping report row ${i + 1} due to missing Account ID or Report Name:`, values);
-                }
-            }
-
-            const updatedAccounts = accounts.map(account => {
-                const newReportsForAccount = reportsToAdd.filter(
-                    report => report.accountId === account.id
+/**
+ * Adds event listeners to the dynamically created suggested report elements.
+ */
+function addSuggestedReportListeners() {
+    document.querySelectorAll('.accept-suggestion-btn').forEach(button => {
+        button.onclick = (e) => {
+            const uniqueId = e.target.dataset.reportUid;
+            const reportIndex = currentEditedAccount.tempSuggestedReports.findIndex(r => r.uniqueId === uniqueId);
+            if (reportIndex > -1) {
+                const reportToAccept = { ...currentEditedAccount.tempSuggestedReports[reportIndex] };
+                delete reportToAccept.suggested; // Remove the suggestion flag
+                delete reportToAccept.uniqueId; // Remove temporary UI ID
+                
+                // Check if this report (by name and type) is already in associatedReports
+                const isAlreadyAdded = currentEditedAccount.associatedReports.some(
+                    ar => ar.name === reportToAccept.name && ar.type === reportToAccept.type
                 );
-                if (newReportsForAccount.length > 0) {
-                    return {
-                        ...account,
-                        associatedReports: [...(account.associatedReports || []), ...newReportsForAccount],
-                    };
-                }
-                return account;
-            });
 
-            reportsToAdd.forEach(report => {
-                if (!updatedAccounts.some(acc => acc.id === report.accountId)) {
-                    console.warn(`Report for unknown Account ID '${report.accountId}' was skipped:`, report);
+                if (!isAlreadyAdded) {
+                    currentEditedAccount.associatedReports.push(reportToAccept);
+                    e.target.textContent = 'Accepted';
+                    e.target.disabled = true;
+                    showMessage(`${reportToAccept.name} added to account.`, 'success');
+                } else {
+                    showMessage(`${reportToAccept.name} is already added to this account.`, 'info');
                 }
-            });
-            accounts = updatedAccounts; // Update global accounts array
-            renderContent();
-            event.target.value = null; // Clear the file input
+            }
         };
-        reader.readAsText(file);
     });
 
-    // Filter controls event listeners
-    document.getElementById('filterReportMinFitScore').addEventListener('input', (e) => { currentFilters.reportMinFitScore = e.target.value; renderContent(); });
-    document.getElementById('filterReportTagSearch').addEventListener('input', (e) => { currentFilters.reportTagSearch = e.target.value; renderContent(); });
-    document.getElementById('filterReportType').addEventListener('change', (e) => { currentFilters.reportTypeFilter = e.target.value; renderContent(); });
-    document.getElementById('filterRegion').addEventListener('change', (e) => { currentFilters.region = e.target.value; renderContent(); });
-    document.getElementById('filterWMS').addEventListener('change', (e) => { currentFilters.wms = e.target.value; renderContent(); });
-    document.getElementById('filterAccountType').addEventListener('change', (e) => { currentFilters.accountType = e.target.value; renderContent(); });
-    document.getElementById('filterCustomerSolutionType').addEventListener('change', (e) => {
-        currentFilters.customerSolutionType = Array.from(e.target.selectedOptions).map(option => option.value);
-        renderContent();
+    document.querySelectorAll('.remove-suggestion-btn').forEach(button => {
+        button.onclick = (e) => {
+            const uniqueId = e.target.dataset.reportUid;
+            const reportIndex = currentEditedAccount.tempSuggestedReports.findIndex(r => r.uniqueId === uniqueId);
+            if (reportIndex > -1) {
+                const removedReport = currentEditedAccount.tempSuggestedReports.splice(reportIndex, 1)[0];
+                document.getElementById(`suggested-report-${uniqueId}`).remove();
+                showMessage(`${removedReport.name} suggestion removed.`, 'info');
+            }
+        };
     });
-    document.getElementById('groupBy').addEventListener('change', (e) => { currentFilters.groupBy = e.target.value; renderContent(); });
-    document.getElementById('reportSortOrder').addEventListener('change', (e) => { currentFilters.reportSortOrder = e.target.value; renderContent(); });
+
+    document.querySelectorAll('.customize-params-btn').forEach(button => {
+        button.onclick = (e) => {
+            const uniqueId = e.target.dataset.reportUid;
+            const editor = document.getElementById(`parameters-editor-${uniqueId}`);
+            editor.classList.toggle('hidden');
+        };
+    });
+
+    document.querySelectorAll('.save-params-btn').forEach(button => {
+        button.onclick = (e) => {
+            const uniqueId = e.target.dataset.reportUid;
+            const editor = document.getElementById(`parameters-editor-${uniqueId}`);
+            const reportIndex = currentEditedAccount.tempSuggestedReports.findIndex(r => r.uniqueId === uniqueId);
+            if (reportIndex > -1) {
+                const report = currentEditedAccount.tempSuggestedReports[reportIndex];
+                const newParams = {};
+                editor.querySelectorAll('input').forEach(input => {
+                    newParams[input.name] = input.type === 'number' ? parseFloat(input.value) : input.value;
+                });
+                report.parameters = newParams; // Update parameters
+
+                // Update the displayed parameters
+                const displayArea = document.querySelector(`#suggested-report-${uniqueId} .report-parameters-display`);
+                displayArea.innerHTML = `<p><strong>Parameters:</strong></p>${Object.entries(report.parameters).map(([key, value]) => `<p class="ml-2">${key}: <span class="font-medium">${value || 'N/A'}</span></p>`).join('')}`;
+
+                editor.classList.add('hidden'); // Hide editor
+                showMessage(`Parameters for ${report.name} saved.`, 'success');
+            }
+        };
+    });
+
+    document.querySelectorAll('.cancel-params-btn').forEach(button => {
+        button.onclick = (e) => {
+            const uniqueId = e.target.dataset.reportUid;
+            const editor = document.getElementById(`parameters-editor-${uniqueId}`);
+            editor.classList.add('hidden'); // Hide editor without saving
+        };
+    });
+
+    document.getElementById('finalizeAccountBtn').onclick = () => {
+        if (!currentEditedAccount) return;
+
+        // Ensure associatedReports is an array
+        currentEditedAccount.associatedReports = currentEditedAccount.associatedReports || [];
+
+        // Add any remaining un-accepted suggestions if desired (optional, prompt says "accept")
+        // For now, only explicitly accepted reports are added.
+
+        const accountStore = getObjectStore(STORE_NAME_ACCOUNTS, 'readwrite');
+        const request = accountStore.add(currentEditedAccount);
+
+        request.onsuccess = () => {
+            showMessage('Account and selected reports saved successfully!', 'success');
+            resetUIForNewAccount();
+            loadAllAccounts();
+            populateFilterOptions();
+        };
+        request.onerror = (e) => {
+            console.error('Error saving finalized account:', e.target.error);
+            showMessage('Error saving account and reports.', 'error');
+        };
+    };
+
+    document.getElementById('cancelSuggestionsBtn').onclick = () => {
+        showMessage('Account creation cancelled. No data saved.', 'info');
+        resetUIForNewAccount();
+    };
+}
+
+/**
+ * Resets the UI after account creation or cancellation.
+ */
+function resetUIForNewAccount() {
+    currentEditedAccount = null;
+    document.getElementById('suggestedReportsSection').classList.add('hidden'); // Hide suggestions
+    document.querySelector('.container > div:nth-child(4)').classList.remove('hidden'); // Show Add New Account
+    document.querySelector('.container > div:nth-child(5)').classList.remove('hidden'); // Show Add New Report
+    document.getElementById('searchBar').classList.remove('hidden'); // Show search bar
+    document.getElementById('toggleFilters').closest('.bg-gray-50').classList.remove('hidden'); // Show filters
+    document.getElementById('exportCsvBtn').classList.remove('hidden'); // Show export button
+    document.getElementById('viewAccountsBtn').classList.remove('hidden'); // Show view toggles
+    document.getElementById('viewReportsBtn').classList.remove('hidden'); // Show view toggles
+
+    // Clear manual input form
+    document.getElementById('newAccountName').value = '';
+    document.getElementById('newAccountRegion').value = '';
+    document.getElementById('newAccountWMS').value = '';
+    document.getElementById('newAccountType').value = '';
+    document.getElementById('newCustomerSolutionType').value = '';
+    document.getElementById('newAccountBuilding').value = '';
+    document.getElementById('newNumberOfShifts').value = '';
+    document.getElementById('newPickingMethods').value = '';
+    document.getElementById('newCustomerSLAsText').value = '';
+    document.getElementById('newTransportationConfig').value = '';
+    document.getElementById('newFoodGrade').checked = false;
+    document.getElementById('newHazardousMaterials').checked = false;
+    document.getElementById('newInternationalShipping').checked = false;
+    document.getElementById('newProcessesReturns').checked = false;
+    document.getElementById('newTemperatureControlled').checked = false;
+    document.getElementById('newUsesAutomation').checked = false;
+}
+
+
+// --- Existing Functions Modified/Integrated ---
+
+function setupEventListeners() {
+    document.getElementById('addNewAccountBtn').addEventListener('click', addAccountManually);
+    document.getElementById('toggleAddAccounts').addEventListener('click', toggleSection('addAccountsContent'));
+    document.getElementById('toggleAddReports').addEventListener('click', toggleSection('addReportsContent'));
+    document.getElementById('toggleFilters').addEventListener('click', toggleSection('filtersContent'));
+    document.getElementById('viewAccountsBtn').addEventListener('click', () => { currentView = 'accounts'; updateView(); });
+    document.getElementById('viewReportsBtn').addEventListener('click', () => { currentView = 'reports'; updateView(); });
+    document.getElementById('searchBar').addEventListener('input', applyFilters);
+    document.getElementById('filterRegion').addEventListener('change', applyFilters);
+    document.getElementById('filterWMS').addEventListener('change', applyFilters);
+    document.getElementById('filterAccountType').addEventListener('change', applyFilters);
+    document.getElementById('filterCustomerSolutionType').addEventListener('change', applyFilters);
+    document.getElementById('filterReportMinFitScore').addEventListener('input', applyFilters);
+    document.getElementById('filterReportTagSearch').addEventListener('input', applyFilters);
+    document.getElementById('filterReportType').addEventListener('change', applyFilters);
+    document.getElementById('groupBy').addEventListener('change', applyFilters);
+    document.getElementById('reportSortOrder').addEventListener('change', applyFilters);
+    document.getElementById('exportCsvBtn').addEventListener('click', exportAccountsToCsv);
 
     // Boolean filter buttons
     document.querySelectorAll('[data-filter-name]').forEach(button => {
         button.addEventListener('click', (e) => {
             const filterName = e.target.dataset.filterName;
             const filterValue = e.target.dataset.filterValue;
-            currentFilters[filterName] = filterValue;
-            renderContent();
+
+            // Remove 'active-filter' from siblings
+            document.querySelectorAll(`[data-filter-name="${filterName}"]`).forEach(btn => {
+                btn.classList.remove('active-filter');
+            });
+            // Add 'active-filter' to clicked button
+            e.target.classList.add('active-filter');
+            applyFilters();
         });
     });
-});
+
+    document.getElementById('addNewReportBtn').addEventListener('click', addNewReport);
+    document.getElementById('accountCsvUpload').addEventListener('change', handleAccountCsvUpload);
+    document.getElementById('reportCsvUpload').addEventListener('change', handleReportCsvUpload);
+}
+
+
+function toggleSection(contentId) {
+    return function() {
+        const content = document.getElementById(contentId);
+        const button = this;
+        const svg = button.querySelector('svg');
+
+        if (content.classList.contains('hidden')) {
+            content.classList.remove('hidden');
+            svg.style.transform = 'rotate(180deg)';
+            button.classList.add('expanded');
+            button.classList.remove('collapsed');
+        } else {
+            content.classList.add('hidden');
+            svg.style.transform = 'rotate(0deg)';
+            button.classList.add('collapsed');
+            button.classList.remove('expanded');
+        }
+    };
+}
+
+function showMessage(message, type = 'info') {
+    const displayArea = document.getElementById('messageDisplay');
+    displayArea.textContent = message;
+    displayArea.className = 'text-center p-3 rounded-md mb-4 '; // Reset classes
+    displayArea.classList.remove('hidden');
+
+    if (type === 'success') {
+        displayArea.classList.add('bg-green-100', 'text-green-800');
+    } else if (type === 'error') {
+        displayArea.classList.add('bg-red-100', 'text-red-800');
+    } else { // info
+        displayArea.classList.add('bg-blue-100', 'text-blue-800');
+    }
+
+    setTimeout(() => {
+        displayArea.classList.add('hidden');
+    }, 5000); // Hide after 5 seconds
+}
+
+
+function addAccountManually() {
+    const accountName = document.getElementById('newAccountName').value.trim();
+    const region = document.getElementById('newAccountRegion').value.trim();
+    const wms = document.getElementById('newAccountWMS').value.trim();
+    const accountType = document.getElementById('newAccountType').value.trim();
+    const customerSolutionType = document.getElementById('newCustomerSolutionType').value.split(',').map(s => s.trim()).filter(s => s !== '');
+    const building = document.getElementById('newAccountBuilding').value.trim();
+    const numberOfShifts = parseInt(document.getElementById('newNumberOfShifts').value, 10) || 0;
+    const pickingMethods = document.getElementById('newPickingMethods').value.split(',').map(s => s.trim()).filter(s => s !== '');
+    const customerSLAsText = document.getElementById('newCustomerSLAsText').value.trim();
+    const transportationConfig = document.getElementById('newTransportationConfig').value.split(',').map(s => s.trim()).filter(s => s !== '');
+    const foodGrade = document.getElementById('newFoodGrade').checked;
+    const hazardousMaterials = document.getElementById('newHazardousMaterials').checked;
+    const internationalShipping = document.getElementById('newInternationalShipping').checked;
+    const processesReturns = document.getElementById('newProcessesReturns').checked;
+    const temperatureControlled = document.getElementById('newTemperatureControlled').checked;
+    const usesAutomation = document.getElementById('newUsesAutomation').checked;
+
+    if (!accountName || !region || !wms) {
+        showMessage('Please fill in Account Name, Region, and WMS for the new account.', 'error');
+        return;
+    }
+
+    const newAccount = {
+        accountName,
+        region,
+        wms,
+        accountType,
+        customerSolutionType,
+        building,
+        numberOfShifts,
+        pickingMethods,
+        customerSLAsText,
+        transportationConfig,
+        foodGrade,
+        hazardousMaterials,
+        internationalShipping,
+        processesReturns,
+        temperatureControlled,
+        usesAutomation,
+        associatedReports: [] // Initialize with empty array for future reports
+    };
+
+    // Suggest reports immediately after account data is collected
+    const suggestedReports = suggestReportsForAccount(newAccount);
+    displaySuggestedReportsUI(suggestedReports, newAccount); // Display UI for user to accept/customize
+    showMessage(`Account "${accountName}" data collected. Please review suggested reports.`, 'info');
+}
+
+
+function addNewReport() {
+    const accountSelect = document.getElementById('selectAccountForReport');
+    const accountId = parseInt(accountSelect.value, 10);
+    const reportName = document.getElementById('newReportName').value.trim();
+    const reportPath = document.getElementById('newReportPath').value.trim();
+    const reportType = document.getElementById('newReportType').value.trim();
+    const reportTags = document.getElementById('newReportTags').value.split(',').map(s => s.trim()).filter(s => s !== '');
+
+    if (isNaN(accountId) || !reportName || !reportType) {
+        showMessage('Please select an account and fill in Report Name and Report Type.', 'error');
+        return;
+    }
+
+    const newReport = {
+        name: reportName,
+        reportPath: reportPath,
+        type: reportType,
+        tags: reportTags,
+        fitScore: Math.floor(Math.random() * 5) + 1, // Random fit score for new reports
+        parameters: {} // Initialize parameters for manually added reports
+    };
+
+    const store = getObjectStore(STORE_NAME_ACCOUNTS, 'readwrite');
+    const request = store.get(accountId);
+
+    request.onsuccess = function() {
+        const account = request.result;
+        if (account) {
+            // Ensure associatedReports array exists
+            if (!account.associatedReports) {
+                account.associatedReports = [];
+            }
+            // Check for duplicates before adding
+            const isDuplicate = account.associatedReports.some(
+                report => report.name === newReport.name && report.type === newReport.type
+            );
+
+            if (isDuplicate) {
+                showMessage(`Report "${newReport.name}" of type "${newReport.type}" already exists for this account.`, 'error');
+                return;
+            }
+
+            account.associatedReports.push(newReport);
+            const updateRequest = store.put(account);
+
+            updateRequest.onsuccess = () => {
+                showMessage(`Report "${reportName}" added to account "${account.accountName}".`, 'success');
+                // Clear report form
+                document.getElementById('newReportName').value = '';
+                document.getElementById('newReportPath').value = '';
+                document.getElementById('newReportType').value = '';
+                document.getElementById('newReportTags').value = '';
+                document.getElementById('selectAccountForReport').value = ''; // Reset dropdown
+                loadAllAccounts(); // Re-render content
+            };
+            updateRequest.onerror = (e) => {
+                console.error('Error updating account with new report:', e.target.error);
+                showMessage('Error adding report to account.', 'error');
+            };
+        } else {
+            showMessage('Account not found.', 'error');
+        }
+    };
+    request.onerror = (e) => {
+        console.error('Error fetching account:', e.target.error);
+        showMessage('Error fetching account to add report.', 'error');
+    };
+}
+
+function handleAccountCsvUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const text = e.target.result;
+        parseAccountCsv(text);
+    };
+    reader.readAsText(file);
+}
+
+function parseAccountCsv(csvText) {
+    const lines = csvText.split('\n').filter(line => line.trim() !== '');
+    if (lines.length === 0) {
+        showMessage('CSV file is empty.', 'error');
+        return;
+    }
+
+    const headers = lines[0].split(',').map(h => h.trim());
+    const dataLines = lines.slice(1);
+
+    const accountsToImport = [];
+
+    dataLines.forEach(line => {
+        const values = line.split(',').map(v => v.trim());
+        const account = { associatedReports: [] }; // Initialize associatedReports for each imported account
+
+        headers.forEach((header, index) => {
+            let value = values[index];
+            // Normalize header names to match property names
+            let propName = header.toLowerCase()
+                                 .replace(/what wms does this account use\?/, 'wms')
+                                 .replace(/account name/, 'accountName')
+                                 .replace(/account type/, 'accountType')
+                                 .replace(/customer solution type\?/, 'customerSolutionType')
+                                 .replace(/number of shifts/, 'numberOfShifts')
+                                 .replace(/picking methods/, 'pickingMethods')
+                                 .replace(/customer slas text/, 'customerSLAsText')
+                                 .replace(/transportation config/, 'transportationConfig')
+                                 .replace(/food grade/, 'foodGrade')
+                                 .replace(/hazardous materials/, 'hazardousMaterials')
+                                 .replace(/international shipping/, 'internationalShipping')
+                                 .replace(/processes returns/, 'processesReturns')
+                                 .replace(/temperature controlled/, 'temperatureControlled')
+                                 .replace(/uses automation/, 'usesAutomation')
+                                 .replace(/ /g, ''); // Remove spaces for single-word keys like 'region', 'building'
+
+            if (propName.includes('solutiontype') || propName.includes('pickingmethods') || propName.includes('transportationconfig')) {
+                account[propName] = value ? value.split(';').map(s => s.trim()).filter(s => s !== '') : []; // CSV often uses ; for multi-value
+            } else if (['foodGrade', 'hazardousMaterials', 'internationalShipping', 'processesReturns', 'temperatureControlled', 'usesAutomation'].includes(propName)) {
+                account[propName] = value.toLowerCase() === 'true' || value.toLowerCase() === 'yes' || value === '1';
+            } else if (propName === 'numberOfShifts') {
+                account[propName] = parseInt(value, 10) || 0;
+            } else {
+                account[propName] = value;
+            }
+        });
+        accountsToImport.push(account);
+    });
+
+    if (accountsToImport.length > 0) {
+        const store = getObjectStore(STORE_NAME_ACCOUNTS, 'readwrite');
+        let importCount = 0;
+        let errorCount = 0;
+
+        accountsToImport.forEach(accountData => {
+            // Suggest reports for each imported account
+            const suggestedReports = suggestReportsForAccount(accountData);
+            // Directly add suggested reports to the account for CSV import simplicity
+            // In a real app, you might want to present these for review after import.
+            accountData.associatedReports = suggestedReports.map(sr => {
+                delete sr.suggested;
+                delete sr.uniqueId;
+                return sr;
+            });
+            
+            const request = store.add(accountData);
+            request.onsuccess = () => {
+                importCount++;
+                if (importCount + errorCount === accountsToImport.length) {
+                    showMessage(`Finished importing ${importCount} accounts, with ${errorCount} errors.`, 'success');
+                    loadAllAccounts();
+                    populateFilterOptions();
+                }
+            };
+            request.onerror = (e) => {
+                console.error('Error adding account from CSV:', e.target.error);
+                errorCount++;
+                if (importCount + errorCount === accountsToImport.length) {
+                    showMessage(`Finished importing ${importCount} accounts, with ${errorCount} errors.`, 'error');
+                    loadAllAccounts();
+                    populateFilterOptions();
+                }
+            };
+        });
+        document.getElementById('accountCsvUpload').value = ''; // Clear file input
+    } else {
+        showMessage('No valid accounts found in CSV file.', 'error');
+    }
+}
+
+
+function handleReportCsvUpload(event) {
+    const file = event.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = function(e) {
+        const text = e.target.result;
+        parseReportCsv(text);
+    };
+    reader.readAsText(file);
+}
+
+function parseReportCsv(csvText) {
+    const lines = csvText.split('\n').filter(line => line.trim() !== '');
+    if (lines.length === 0) {
+        showMessage('CSV file is empty.', 'error');
+        return;
+    }
+
+    const headers = lines[0].split(',').map(h => h.trim());
+    const dataLines = lines.slice(1);
+
+    const reportsToImport = [];
+
+    dataLines.forEach(line => {
+        const values = line.split(',').map(v => v.trim());
+        const report = { parameters: {} }; // Initialize parameters for imported reports
+
+        headers.forEach((header, index) => {
+            let value = values[index];
+            let propName = header.toLowerCase()
+                                 .replace(/account id/, 'accountId')
+                                 .replace(/report name/, 'name')
+                                 .replace(/report path/, 'reportPath')
+                                 .replace(/report type/, 'type')
+                                 .replace(/tags/, 'tags')
+                                 .replace(/ /g, '');
+
+            if (propName === 'tags') {
+                report[propName] = value ? value.split(',').map(s => s.trim()).filter(s => s !== '') : [];
+            } else if (propName === 'accountId') {
+                report[propName] = parseInt(value, 10);
+            } else {
+                report[propName] = value;
+            }
+        });
+        reportsToImport.push(report);
+    });
+
+    if (reportsToImport.length > 0) {
+        const store = getObjectStore(STORE_NAME_ACCOUNTS, 'readwrite');
+        let importCount = 0;
+        let errorCount = 0;
+        const totalReports = reportsToImport.length;
+
+        reportsToImport.forEach(reportData => {
+            const accountId = reportData.accountId;
+            if (isNaN(accountId)) {
+                errorCount++;
+                console.warn(`Skipping report due to invalid Account ID: ${JSON.stringify(reportData)}`);
+                if (importCount + errorCount === totalReports) {
+                    showMessage(`Finished importing ${importCount} reports, with ${errorCount} errors (invalid Account ID).`, 'error');
+                    loadAllAccounts();
+                }
+                return;
+            }
+
+            const request = store.get(accountId);
+            request.onsuccess = function() {
+                const account = request.result;
+                if (account) {
+                    if (!account.associatedReports) {
+                        account.associatedReports = [];
+                    }
+
+                    // Assign a random fit score to imported reports (could be enhanced later)
+                    reportData.fitScore = Math.floor(Math.random() * 5) + 1;
+
+                    // Check for duplicates before adding
+                    const isDuplicate = account.associatedReports.some(
+                        r => r.name === reportData.name && r.type === reportData.type
+                    );
+
+                    if (!isDuplicate) {
+                        account.associatedReports.push(reportData);
+                        const updateRequest = store.put(account);
+                        updateRequest.onsuccess = () => {
+                            importCount++;
+                            if (importCount + errorCount === totalReports) {
+                                showMessage(`Finished importing ${importCount} reports, with ${errorCount} errors.`, 'success');
+                                loadAllAccounts();
+                            }
+                        };
+                        updateRequest.onerror = (e) => {
+                            errorCount++;
+                            console.error(`Error updating account ${accountId} with report ${reportData.name}:`, e.target.error);
+                            if (importCount + errorCount === totalReports) {
+                                showMessage(`Finished importing ${importCount} reports, with ${errorCount} errors.`, 'error');
+                                loadAllAccounts();
+                            }
+                        };
+                    } else {
+                        errorCount++;
+                        console.warn(`Skipping duplicate report for account ${accountId}: ${reportData.name}`);
+                        if (importCount + errorCount === totalReports) {
+                            showMessage(`Finished importing ${importCount} reports, with ${errorCount} errors (duplicates).`, 'info');
+                            loadAllAccounts();
+                        }
+                    }
+                } else {
+                    errorCount++;
+                    console.warn(`Account with ID ${accountId} not found for report: ${reportData.name}`);
+                    if (importCount + errorCount === totalReports) {
+                        showMessage(`Finished importing ${importCount} reports, with ${errorCount} errors (account not found).`, 'error');
+                        loadAllAccounts();
+                    }
+                }
+            };
+            request.onerror = (e) => {
+                errorCount++;
+                console.error(`Error fetching account ${accountId} for report import:`, e.target.error);
+                if (importCount + errorCount === totalReports) {
+                    showMessage(`Finished importing ${importCount} reports, with ${errorCount} errors.`, 'error');
+                    loadAllAccounts();
+                }
+            };
+        });
+        document.getElementById('reportCsvUpload').value = ''; // Clear file input
+    } else {
+        showMessage('No valid reports found in CSV file.', 'error');
+    }
+}
+
+
+function loadAllAccounts() {
+    const store = getObjectStore(STORE_NAME_ACCOUNTS, 'readonly');
+    const request = store.getAll();
+
+    request.onsuccess = function() {
+        const accounts = request.result;
+        allAccountsData = accounts; // Store all loaded data globally
+        populateAccountSelect(accounts); // Populate dropdown for adding reports
+        applyFilters(); // Apply filters to display content
+    };
+
+    request.onerror = function(e) {
+        console.error('Error loading accounts:', e.target.error);
+        showMessage('Error loading accounts from database.', 'error');
+    };
+}
+
+function populateAccountSelect(accounts) {
+    const select = document.getElementById('selectAccountForReport');
+    select.innerHTML = '<option value="">-- Select an Account --</option>'; // Clear existing options
+    accounts.forEach(account => {
+        const option = document.createElement('option');
+        option.value = account.id;
+        option.textContent = account.accountName;
+        select.appendChild(option);
+    });
+}
+
+let allAccountsData = []; // Store all accounts here
+
+function applyFilters() {
+    let filteredAccounts = [...allAccountsData];
+
+    const searchTerm = document.getElementById('searchBar').value.toLowerCase();
+    const filterRegion = document.getElementById('filterRegion').value;
+    const filterWMS = document.getElementById('filterWMS').value;
+    const filterAccountType = document.getElementById('filterAccountType').value;
+    const filterCustomerSolutionType = Array.from(document.getElementById('filterCustomerSolutionType').selectedOptions).map(option => option.value);
+    const filterReportMinFitScore = parseInt(document.getElementById('filterReportMinFitScore').value, 10);
+    const filterReportTagSearch = document.getElementById('filterReportTagSearch').value.toLowerCase().split(',').map(s => s.trim()).filter(s => s !== '');
+    const filterReportType = document.getElementById('filterReportType').value;
+
+    const groupByField = document.getElementById('groupBy').value;
+    const reportSortOrder = document.getElementById('reportSortOrder').value;
+
+    const booleanFilters = {};
+    document.querySelectorAll('[data-filter-name]').forEach(button => {
+        const filterName = button.dataset.filterName;
+        if (button.classList.contains('active-filter')) {
+            booleanFilters[filterName] = button.dataset.filterValue;
+        }
+    });
+
+    if (searchTerm) {
+        filteredAccounts = filteredAccounts.filter(account =>
+            (account.accountName && account.accountName.toLowerCase().includes(searchTerm)) ||
+            (account.region && account.region.toLowerCase().includes(searchTerm)) ||
+            (account.wms && account.wms.toLowerCase().includes(searchTerm)) ||
+            (account.building && account.building.toLowerCase().includes(searchTerm))
+        );
+    }
+
+    if (filterRegion) {
+        filteredAccounts = filteredAccounts.filter(account => account.region === filterRegion);
+    }
+    if (filterWMS) {
+        filteredAccounts = filteredAccounts.filter(account => account.wms === filterWMS);
+    }
+    if (filterAccountType) {
+        filteredAccounts = filteredAccounts.filter(account => account.accountType === filterAccountType);
+    }
+    if (filterCustomerSolutionType.length > 0) {
+        filteredAccounts = filteredAccounts.filter(account =>
+            account.customerSolutionType && filterCustomerSolutionType.every(filter => account.customerSolutionType.includes(filter))
+        );
+    }
+
+    // Apply boolean filters
+    for (const key in booleanFilters) {
+        const filterValue = booleanFilters[key];
+        if (filterValue !== 'any') {
+            const expectedBoolean = filterValue === 'yes';
+            filteredAccounts = filteredAccounts.filter(account => account[key] === expectedBoolean);
+        }
+    }
+
+    let displayData = [];
+    if (currentView === 'accounts') {
+        // When in 'accounts' view, account-level filters apply directly
+        displayData = filteredAccounts;
+        document.getElementById('accountFiltersContainer').classList.remove('hidden');
+        document.getElementById('groupByContainer').classList.remove('hidden');
+        document.getElementById('reportSortContainer').classList.add('hidden');
+    } else { // currentView === 'reports'
+        document.getElementById('accountFiltersContainer').classList.add('hidden'); // Hide account-level filters
+        document.getElementById('groupByContainer').classList.add('hidden'); // Hide group by
+        document.getElementById('reportSortContainer').classList.remove('hidden'); // Show report sorting
+
+        // Flatten reports and apply report-specific filters
+        let allReports = [];
+        filteredAccounts.forEach(account => {
+            if (account.associatedReports) {
+                account.associatedReports.forEach(report => {
+                    allReports.push({ ...report, accountName: account.accountName, accountId: account.id, accountRegion: account.region, accountWMS: account.wms });
+                });
+            }
+        });
+
+        if (filterReportMinFitScore) {
+            allReports = allReports.filter(report => report.fitScore >= filterReportMinFitScore);
+        }
+        if (filterReportTagSearch.length > 0) {
+            allReports = allReports.filter(report =>
+                report.tags && filterReportTagSearch.every(tag => report.tags.map(t => t.toLowerCase()).includes(tag))
+            );
+        }
+        if (filterReportType) {
+            allReports = allReports.filter(report => report.type === filterReportType);
+        }
+
+        if (reportSortOrder === 'desc') {
+            allReports.sort((a, b) => b.fitScore - a.fitScore);
+        } else if (reportSortOrder === 'asc') {
+            allReports.sort((a, b) => a.fitScore - b.fitScore);
+        }
+        
+        displayData = allReports;
+    }
+
+    renderContent(displayData, groupByField);
+}
+
+
+function renderContent(data, groupByField) {
+    const contentDisplay = document.getElementById('contentDisplay');
+    contentDisplay.innerHTML = ''; // Clear previous content
+
+    if (data.length === 0) {
+        contentDisplay.innerHTML = '<p class="text-center text-white-500">No results found matching your filters.</p>';
+        return;
+    }
+
+    if (currentView === 'accounts') {
+        if (groupByField && groupByField !== 'none') {
+            const groupedData = data.reduce((acc, account) => {
+                let key = account[groupByField];
+                if (Array.isArray(key)) { // For multi-value fields like customerSolutionType
+                    key.forEach(item => {
+                        if (!acc[item]) acc[item] = [];
+                        acc[item].push(account);
+                    });
+                } else {
+                    if (!key) key = 'Uncategorized';
+                    if (!acc[key]) acc[key] = [];
+                    acc[key].push(account);
+                }
+                return acc;
+            }, {});
+
+            for (const groupKey in groupedData) {
+                const groupContainer = document.createElement('div');
+                groupContainer.className = 'mb-8';
+                groupContainer.innerHTML = `<h3 class="text-xl font-bold text-gray-700 mb-4">${groupByField.replace(/([A-Z])/g, ' $1').replace(/^./, str => str.toUpperCase())}: ${groupKey}</h3>`;
+                
+                const groupGrid = document.createElement('div');
+                groupGrid.className = 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6';
+                groupedData[groupKey].forEach(account => {
+                    groupGrid.appendChild(createAccountCard(account));
+                });
+                groupContainer.appendChild(groupGrid);
+                contentDisplay.appendChild(groupContainer);
+            }
+        } else {
+            const grid = document.createElement('div');
+            grid.className = 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6';
+            data.forEach(account => {
+                grid.appendChild(createAccountCard(account));
+            });
+            contentDisplay.appendChild(grid);
+        }
+    } else { // currentView === 'reports'
+        const grid = document.createElement('div');
+        grid.className = 'grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6';
+        data.forEach(report => {
+            grid.appendChild(createReportCard(report));
+        });
+        contentDisplay.appendChild(grid);
+    }
+}
+
+
+function createAccountCard(account) {
+    const card = document.createElement('div');
+    card.className = 'account-card bg-white p-4 rounded-lg shadow-md border border-gray-200';
+    card.innerHTML = `
+        <h3 class="text-xl font-bold text-primary-color mb-2">${account.accountName}</h3>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Region:</span> ${account.region}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">WMS:</span> ${account.wms}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Type:</span> ${account.accountType || 'N/A'}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Solution:</span> ${account.customerSolutionType && account.customerSolutionType.length > 0 ? account.customerSolutionType.join(', ') : 'N/A'}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Building:</span> ${account.building || 'N/A'}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Shifts:</span> ${account.numberOfShifts || 'N/A'}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Picking Methods:</span> ${account.pickingMethods && account.pickingMethods.length > 0 ? account.pickingMethods.join(', ') : 'N/A'}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">SLAs:</span> ${account.customerSLAsText || 'N/A'}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Transportation:</span> ${account.transportationConfig && account.transportationConfig.length > 0 ? account.transportationConfig.join(', ') : 'N/A'}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Food Grade:</span> ${account.foodGrade ? 'Yes' : 'No'}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Hazardous Materials:</span> ${account.hazardousMaterials ? 'Yes' : 'No'}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">International Shipping:</span> ${account.internationalShipping ? 'Yes' : 'No'}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Processes Returns:</span> ${account.processesReturns ? 'Yes' : 'No'}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Temp. Controlled:</span> ${account.temperatureControlled ? 'Yes' : 'No'}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Uses Automation:</span> ${account.usesAutomation ? 'Yes' : 'No'}</p>
+        <button class="btn btn-red btn-sm mt-4 delete-account-btn" data-id="${account.id}">Delete Account</button>
+        <div class="mt-4 border-t pt-3">
+            <h4 class="font-semibold text-subtitle-color mb-2">Associated Reports (${account.associatedReports ? account.associatedReports.length : 0})</h4>
+            <div id="reports-for-account-${account.id}">
+                ${account.associatedReports && account.associatedReports.length > 0
+                    ? account.associatedReports.map(report => `
+                        <div class="report-item-card bg-gray-50 p-3 rounded-md mb-2 border border-gray-200">
+                            <p class="font-medium text-text-color">${report.name} <span class="text-sm text-gray-500">(${report.type})</span></p>
+                            <p class="text-xs text-gray-600">Path: ${report.reportPath || 'N/A'}</p>
+                            <p class="text-xs text-gray-600">Tags: ${report.tags && report.tags.length > 0 ? report.tags.join(', ') : 'N/A'}</p>
+                            <p class="text-xs text-gray-600">Fit Score: ${report.fitScore || 'N/A'}</p>
+                            <div class="text-xs text-gray-700">
+                                <strong>Parameters:</strong>
+                                ${Object.entries(report.parameters || {}).map(([key, value]) => `<span class="ml-1">${key}: ${value || 'N/A'}</span>`).join(', ')}
+                            </div>
+                            <button class="btn btn-red-outline btn-xs mt-2 delete-report-btn" data-account-id="${account.id}" data-report-name="${report.name}" data-report-type="${report.type}">Remove Report</button>
+                        </div>
+                    `).join('')
+                    : '<p class="text-sm text-gray-500">No reports associated.</p>'}
+            </div>
+        </div>
+    `;
+
+    card.querySelector('.delete-account-btn').addEventListener('click', deleteAccount);
+    card.querySelectorAll('.delete-report-btn').forEach(button => {
+        button.addEventListener('click', deleteReportFromAccount);
+    });
+    return card;
+}
+
+function createReportCard(report) {
+    const card = document.createElement('div');
+    card.className = 'report-item-card bg-white p-4 rounded-lg shadow-md border border-gray-200';
+    card.innerHTML = `
+        <h3 class="text-xl font-bold text-others-color mb-2">${report.name}</h3>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Type:</span> ${report.type || 'N/A'}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Associated Account:</span> ${report.accountName || 'N/A'} (ID: ${report.accountId})</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Path:</span> ${report.reportPath || 'N/A'}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Tags:</span> ${report.tags && report.tags.length > 0 ? report.tags.join(', ') : 'N/A'}</p>
+        <p class="text-gray-700 mb-1"><span class="font-semibold">Fit Score:</span> ${report.fitScore || 'N/A'}</p>
+        <div class="mt-2 text-sm text-gray-700">
+            <strong>Parameters:</strong>
+            ${Object.entries(report.parameters || {}).map(([key, value]) => `<span class="ml-1">${key}: ${value || 'N/A'}</span>`).join(', ')}
+        </div>
+    `;
+    return card;
+}
+
+
+function deleteAccount(event) {
+    const accountId = parseInt(event.target.dataset.id, 10);
+    if (!confirm('Are you sure you want to delete this account and all its associated reports?')) {
+        return;
+    }
+
+    const store = getObjectStore(STORE_NAME_ACCOUNTS, 'readwrite');
+    const request = store.delete(accountId);
+
+    request.onsuccess = () => {
+        showMessage('Account deleted successfully!', 'success');
+        loadAllAccounts(); // Re-render content
+    };
+    request.onerror = (e) => {
+        console.error('Error deleting account:', e.target.error);
+        showMessage('Error deleting account.', 'error');
+    };
+}
+
+function deleteReportFromAccount(event) {
+    const accountId = parseInt(event.target.dataset.accountId, 10);
+    const reportName = event.target.dataset.reportName;
+    const reportType = event.target.dataset.reportType;
+
+    if (!confirm(`Are you sure you want to remove the report "${reportName}" from this account?`)) {
+        return;
+    }
+
+    const store = getObjectStore(STORE_NAME_ACCOUNTS, 'readwrite');
+    const request = store.get(accountId);
+
+    request.onsuccess = function() {
+        const account = request.result;
+        if (account && account.associatedReports) {
+            const initialLength = account.associatedReports.length;
+            account.associatedReports = account.associatedReports.filter(
+                report => !(report.name === reportName && report.type === reportType)
+            );
+
+            if (account.associatedReports.length < initialLength) {
+                const updateRequest = store.put(account);
+                updateRequest.onsuccess = () => {
+                    showMessage(`Report "${reportName}" removed from account "${account.accountName}".`, 'success');
+                    loadAllAccounts(); // Re-render content
+                };
+                updateRequest.onerror = (e) => {
+                    console.error('Error updating account after report removal:', e.target.error);
+                    showMessage('Error removing report from account.', 'error');
+                };
+            } else {
+                showMessage('Report not found in account.', 'error');
+            }
+        } else {
+            showMessage('Account not found or has no reports.', 'error');
+        }
+    };
+    request.onerror = (e) => {
+        console.error('Error fetching account to remove report:', e.target.error);
+        showMessage('Error fetching account.', 'error');
+    };
+}
+
+
+function populateFilterOptions() {
+    const regions = new Set();
+    const wmss = new Set();
+    const accountTypes = new Set();
+    const customerSolutionTypes = new Set();
+    const reportTypes = new Set();
+
+    allAccountsData.forEach(account => {
+        if (account.region) regions.add(account.region);
+        if (account.wms) wmss.add(account.wms);
+        if (account.accountType) accountTypes.add(account.accountType);
+        if (account.customerSolutionType) {
+            account.customerSolutionType.forEach(type => customerSolutionTypes.add(type));
+        }
+        if (account.associatedReports) {
+            account.associatedReports.forEach(report => {
+                if (report.type) reportTypes.add(report.type);
+            });
+        }
+    });
+
+    populateSelect('filterRegion', Array.from(regions).sort());
+    populateSelect('filterWMS', Array.from(wmss).sort());
+    populateSelect('filterAccountType', Array.from(accountTypes).sort());
+    populateSelect('filterCustomerSolutionType', Array.from(customerSolutionTypes).sort(), true); // Multi-select
+    populateSelect('filterReportType', Array.from(reportTypes).sort());
+}
+
+function populateSelect(elementId, options, isMulti = false) {
+    const select = document.getElementById(elementId);
+    if (!isMulti) {
+        select.innerHTML = '<option value="">All</option>'; // Default for single select
+    } else {
+        select.innerHTML = ''; // Clear for multi-select, no "All" option
+    }
+
+    options.forEach(optionText => {
+        const option = document.createElement('option');
+        option.value = optionText;
+        option.textContent = optionText;
+        select.appendChild(option);
+    });
+}
+
+function updateView() {
+    document.getElementById('viewAccountsBtn').classList.remove('btn-primary', 'btn-secondary');
+    document.getElementById('viewReportsBtn').classList.remove('btn-primary', 'btn-secondary');
+
+    if (currentView === 'accounts') {
+        document.getElementById('viewAccountsBtn').classList.add('btn-primary');
+        document.getElementById('viewReportsBtn').classList.add('btn-secondary');
+        document.getElementById('groupByContainer').classList.remove('hidden');
+        document.getElementById('reportSortContainer').classList.add('hidden');
+        document.getElementById('accountFiltersContainer').classList.remove('hidden'); // Ensure account filters are visible
+    } else {
+        document.getElementById('viewAccountsBtn').classList.add('btn-secondary');
+        document.getElementById('viewReportsBtn').classList.add('btn-primary');
+        document.getElementById('groupByContainer').classList.add('hidden');
+        document.getElementById('reportSortContainer').classList.remove('hidden');
+        document.getElementById('accountFiltersContainer').classList.add('hidden'); // Hide account filters
+    }
+    applyFilters();
+}
+
+function exportAccountsToCsv() {
+    if (allAccountsData.length === 0) {
+        showMessage('No data to export.', 'info');
+        return;
+    }
+
+    const headers = [
+        "Account Name", "Region", "What WMS does this account use?", "Account Type",
+        "Customer Solution Type?", "Building", "Number of Shifts", "Picking Methods",
+        "Customer SLAs Text", "Transportation Config", "Food Grade", "Hazardous Materials",
+        "International Shipping", "Processes Returns", "Temperature Controlled", "Uses Automation",
+        "Reports" // Combined reports for CSV simplicity
+    ];
+
+    let csvContent = headers.join(',') + '\n';
+
+    allAccountsData.forEach(account => {
+        const row = [];
+        row.push(csvEscape(account.accountName || ''));
+        row.push(csvEscape(account.region || ''));
+        row.push(csvEscape(account.wms || ''));
+        row.push(csvEscape(account.accountType || ''));
+        row.push(csvEscape(Array.isArray(account.customerSolutionType) ? account.customerSolutionType.join(';') : '')); // Use ; for multi-value
+        row.push(csvEscape(account.building || ''));
+        row.push(account.numberOfShifts !== undefined ? account.numberOfShifts.toString() : '');
+        row.push(csvEscape(Array.isArray(account.pickingMethods) ? account.pickingMethods.join(';') : ''));
+        row.push(csvEscape(account.customerSLAsText || ''));
+        row.push(csvEscape(Array.isArray(account.transportationConfig) ? account.transportationConfig.join(';') : ''));
+        row.push(account.foodGrade ? 'TRUE' : 'FALSE');
+        row.push(account.hazardousMaterials ? 'TRUE' : 'FALSE');
+        row.push(account.internationalShipping ? 'TRUE' : 'FALSE');
+        row.push(account.processesReturns ? 'TRUE' : 'FALSE');
+        row.push(account.temperatureControlled ? 'TRUE' : 'FALSE');
+        row.push(account.usesAutomation ? 'TRUE' : 'FALSE');
+
+        // Serialize reports for CSV
+        const reportsString = account.associatedReports && account.associatedReports.length > 0
+            ? JSON.stringify(account.associatedReports.map(r => ({
+                name: r.name,
+                type: r.type,
+                path: r.reportPath,
+                tags: r.tags ? r.tags.join('|') : '', // Use | for tags within a report
+                fitScore: r.fitScore,
+                parameters: r.parameters ? JSON.stringify(r.parameters) : '{}'
+              })))
+            : '[]';
+        row.push(csvEscape(reportsString));
+
+        csvContent += row.join(',') + '\n';
+    });
+
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const link = document.createElement('a');
+    if (link.download !== undefined) { // feature detection
+        const url = URL.createObjectURL(blob);
+        link.setAttribute('href', url);
+        link.setAttribute('download', 'odw_accounts_reports.csv');
+        link.style.visibility = 'hidden';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        showMessage('Accounts and reports exported to CSV!', 'success');
+    }
+}
+
+function csvEscape(value) {
+    if (value === null || value === undefined) {
+        return '';
+    }
+    value = String(value);
+    if (value.includes(',') || value.includes('"') || value.includes('\n')) {
+        return '"' + value.replace(/"/g, '""') + '"';
+    }
+    return value;
+}
