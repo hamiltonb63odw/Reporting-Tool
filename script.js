@@ -122,6 +122,7 @@ function initDb() {
         db = event.target.result;
         console.log('IndexedDB opened successfully');
         loadAllAccounts();
+        populateFilterOptions();
     };
 
     request.onerror = function(event) {
@@ -316,6 +317,7 @@ function addSuggestedReportListeners() {
             showMessage('Account and reports saved!', 'success');
             resetUIForNewAccount();
             loadAllAccounts();
+            populateFilterOptions();
         };
         request.onerror = (e) => {
             console.error('Error saving account:', e.target.error);
@@ -352,27 +354,17 @@ function setupEventListeners() {
     document.getElementById('viewReportsBtn').addEventListener('click', () => { currentView = 'reports'; updateView(); });
     document.getElementById('searchBar').addEventListener('input', applyFilters);
     ['filterRegion', 'filterWMS', 'filterAccountType', 'filterCustomerSolutionType', 'filterReportMinFitScore', 'filterReportTagSearch', 'filterReportType', 'groupBy', 'reportSortOrder'].forEach(id => {
-        document.getElementById(id).addEventListener('input', applyFilters);
+        document.getElementById(id).addEventListener('change', applyFilters);
     });
     document.getElementById('exportCsvBtn').addEventListener('click', exportAccountsToCsv);
-    
-    // ** IMPROVED: More robust boolean filter logic **
-    document.querySelectorAll('.filter-btn-group').forEach(group => {
-        group.addEventListener('click', (e) => {
-            const button = e.target.closest('[data-filter-name]');
-            if (!button) return;
-
-            // Remove active class from all buttons in the same group
-            group.querySelectorAll('[data-filter-name]').forEach(btn => {
-                btn.classList.remove('active-filter');
-            });
-
-            // Add active class to the clicked button
-            button.classList.add('active-filter');
+    document.querySelectorAll('[data-filter-name]').forEach(button => {
+        button.addEventListener('click', (e) => {
+            const filterName = e.target.dataset.filterName;
+            document.querySelectorAll(`[data-filter-name="${filterName}"]`).forEach(btn => btn.classList.remove('active-filter'));
+            e.target.classList.add('active-filter');
             applyFilters();
         });
     });
-
     document.getElementById('addNewReportBtn').addEventListener('click', addNewReport);
     document.getElementById('submitAccountCsvBtn').addEventListener('click', handleAccountCsvUpload);
     document.getElementById('submitReportCsvBtn').addEventListener('click', handleReportCsvUpload);
@@ -534,17 +526,20 @@ function handleReportCsvUpload() {
     processCsvFile(file, parseReportCsv);
 }
 
+// ** FINAL FIX: Correctly maps CSV headers to camelCase properties **
 function headerToCamelCase(header) {
+    // Handle special cases first
     const specialCases = {
         'what wms does this account use?': 'wms',
         'customer solution type?': 'customerSolutionType',
         'customer slas text': 'customerSLAsText'
     };
-    const lowerCaseHeader = header.toLowerCase().trim();
+    const lowerCaseHeader = header.toLowerCase();
     if (specialCases[lowerCaseHeader]) {
         return specialCases[lowerCaseHeader];
     }
-    return lowerCaseHeader.replace(/\s(.)/g, (match, group1) => group1.toUpperCase()).replace(/\s/g, '');
+    // General case: convert "Title Case" to "camelCase"
+    return lowerCaseHeader.replace(/\s(.)/g, (match, group1) => group1.toUpperCase());
 }
 
 async function parseAccountCsv(csvText) {
@@ -595,6 +590,7 @@ async function parseAccountCsv(csvText) {
             await Promise.all(promises);
             showMessage(`Finished! Imported ${importCount} accounts, with ${errorCount} errors.`, errorCount > 0 ? 'error' : 'success');
             loadAllAccounts();
+            populateFilterOptions();
         } else {
             showMessage('No valid accounts found in file.', 'error');
         }
@@ -674,7 +670,6 @@ function loadAllAccounts() {
     store.getAll().onsuccess = function(e) {
         allAccountsData = e.target.result;
         populateAccountSelect(allAccountsData);
-        populateFilterOptions(); // Populate filters after loading data
         applyFilters();
     };
 }
@@ -712,9 +707,9 @@ function applyFilters() {
             filteredAccounts = filteredAccounts.filter(acc => acc.customerSolutionType && solutionTypes.every(st => acc.customerSolutionType.includes(st)));
         }
         document.querySelectorAll('[data-filter-name].active-filter').forEach(button => {
+            const filterName = button.dataset.filterName;
             const filterValue = button.dataset.filterValue;
             if (filterValue !== 'any') {
-                const filterName = button.dataset.filterName;
                 const expectedBoolean = filterValue === 'yes';
                 filteredAccounts = filteredAccounts.filter(account => account[filterName] === expectedBoolean);
             }
@@ -727,7 +722,7 @@ function applyFilters() {
             type: document.getElementById('filterReportType').value,
             tags: document.getElementById('filterReportTagSearch').value.toLowerCase().split(',').map(s => s.trim()).filter(Boolean)
         };
-        if (reportFilters.minScore) allReports = allReports.filter(r => (r.fitScore || 0) >= reportFilters.minScore);
+        if (reportFilters.minScore) allReports = allReports.filter(r => r.fitScore >= reportFilters.minScore);
         if (reportFilters.type) allReports = allReports.filter(r => r.type === reportFilters.type);
         if (reportFilters.tags.length > 0) allReports = allReports.filter(r => r.tags && reportFilters.tags.every(t => r.tags.map(tag => tag.toLowerCase()).includes(t)));
 
@@ -774,17 +769,14 @@ function renderContent(data, groupByField) {
     }
 }
 
-// ** FIX: Added Customer Solution Type to the card display **
 function createAccountCard(account) {
     const card = document.createElement('div');
     card.className = 'account-card bg-white p-4 rounded-lg shadow-md border border-gray-200 flex flex-col';
-    const solutionTypes = account.customerSolutionType && account.customerSolutionType.length > 0 ? account.customerSolutionType.join(', ') : 'N/A';
     card.innerHTML = `
         <div class="flex-grow">
             <h3 class="text-xl font-bold text-primary-color mb-2">${account.accountName} <span class="text-sm font-normal text-gray-500">(ID: ${account.id})</span></h3>
             <p class="text-gray-700 mb-1"><span class="font-semibold">Region:</span> ${account.region}</p>
             <p class="text-gray-700 mb-1"><span class="font-semibold">WMS:</span> ${account.wms}</p>
-            <p class="text-gray-700 mb-1"><span class="font-semibold">Solution Type:</span> ${solutionTypes}</p>
             <div class="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-sm">
                 ${Object.entries({
                     'Food Grade': account.foodGrade, 'Hazmat': account.hazardousMaterials, 'Int\'l Ship': account.internationalShipping,
