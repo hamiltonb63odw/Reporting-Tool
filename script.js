@@ -103,7 +103,7 @@ function initDb() {
         db = event.target.result;
         if (!db.objectStoreNames.contains(STORE_NAME_ACCOUNTS)) {
             const accountStore = db.createObjectStore(STORE_NAME_ACCOUNTS, { keyPath: 'id', autoIncrement: true });
-            accountStore.createIndex('accountName', 'accountName', { unique: false });
+            accountStore.createIndex('name', 'accountName', { unique: false });
             accountStore.createIndex('region', 'region', { unique: false });
             accountStore.createIndex('wms', 'wms', { unique: false });
             accountStore.createIndex('accountType', 'accountType', { unique: false });
@@ -114,6 +114,7 @@ function initDb() {
             accountStore.createIndex('internationalShipping', 'internationalShipping', { unique: false });
             accountStore.createIndex('processesReturns', 'processesReturns', { unique: false });
             accountStore.createIndex('temperatureControlled', 'temperatureControlled', { unique: false });
+            // ** BUG FIX HERE **
             accountStore.createIndex('usesAutomation', 'usesAutomation', { unique: false });
         }
     };
@@ -366,6 +367,7 @@ function setupEventListeners() {
         });
     });
     document.getElementById('addNewReportBtn').addEventListener('click', addNewReport);
+    // ** NEW: Listen for clicks on buttons, not changes on inputs **
     document.getElementById('submitAccountCsvBtn').addEventListener('click', handleAccountCsvUpload);
     document.getElementById('submitReportCsvBtn').addEventListener('click', handleReportCsvUpload);
 }
@@ -389,7 +391,7 @@ function showMessage(message, type = 'info') {
         error: ['bg-red-100', 'text-red-800'],
         info: ['bg-blue-100', 'text-blue-800']
     };
-    displayArea.classList.add(...(typeClasses[type] || typeClasses.info));
+    displayArea.classList.add(...(typeClasses[type] || typeClasses['info']));
     if (type !== 'info') {
         setTimeout(() => displayArea.classList.add('hidden'), 5000);
     }
@@ -456,14 +458,15 @@ function addNewReport() {
                 ['newReportName', 'newReportPath', 'newReportType', 'newReportTags', 'selectAccountForReport'].forEach(id => document.getElementById(id).value = '');
                 loadAllAccounts();
             };
-            updateRequest.onerror = () => showMessage('Error adding report.', 'error');
+            updateRequest.onerror = (e) => showMessage('Error adding report.', 'error');
         } else {
             showMessage('Account not found.', 'error');
         }
     };
-    request.onerror = () => showMessage('Error fetching account.', 'error');
+    request.onerror = (e) => showMessage('Error fetching account.', 'error');
 }
 
+// ** NEW: Robust CSV Parsing Logic **
 function robustCsvParser(csvText) {
     const rows = [];
     let currentRow = [];
@@ -526,22 +529,6 @@ function handleReportCsvUpload() {
     processCsvFile(file, parseReportCsv);
 }
 
-// ** FINAL FIX: Correctly maps CSV headers to camelCase properties **
-function headerToCamelCase(header) {
-    // Handle special cases first
-    const specialCases = {
-        'what wms does this account use?': 'wms',
-        'customer solution type?': 'customerSolutionType',
-        'customer slas text': 'customerSLAsText'
-    };
-    const lowerCaseHeader = header.toLowerCase();
-    if (specialCases[lowerCaseHeader]) {
-        return specialCases[lowerCaseHeader];
-    }
-    // General case: convert "Title Case" to "camelCase"
-    return lowerCaseHeader.replace(/\s(.)/g, (match, group1) => group1.toUpperCase());
-}
-
 async function parseAccountCsv(csvText) {
     try {
         const parsedData = robustCsvParser(csvText);
@@ -552,7 +539,6 @@ async function parseAccountCsv(csvText) {
         const headers = parsedData[0].map(h => h.trim());
         const dataRows = parsedData.slice(1);
         const accountsToImport = [];
-
         dataRows.forEach(values => {
             if (values.every(v => v.trim() === '')) return;
             if (values.length !== headers.length) {
@@ -561,20 +547,19 @@ async function parseAccountCsv(csvText) {
             }
             const account = { associatedReports: [] };
             headers.forEach((header, index) => {
-                const propName = headerToCamelCase(header);
                 let value = values[index] ? values[index].trim() : '';
-                
-                if (['customerSolutionType', 'pickingMethods', 'transportationConfig'].includes(propName)) {
-                    account[propName] = value ? value.split(/[\n,]+/).map(s => s.trim()).filter(Boolean) : [];
-                } else if (['foodGrade', 'hazardousMaterials', 'internationalShipping', 'processesReturns', 'temperatureControlled', 'usesAutomation'].includes(propName)) {
+                let propName = header.toLowerCase().replace(/\s+/g, '').replace('whatwmsdoesthisaccountuse?', 'wms').replace('customersolutiontype?', 'customersolutiontype');
+                if (propName.includes('solutiontype') || propName.includes('pickingmethods') || propName.includes('transportationconfig')) {
+                    account[propName] = value ? value.split(',').map(s => s.trim()).filter(Boolean) : [];
+                } else if (['foodgrade', 'hazardousmaterials', 'internationalshipping', 'processesreturns', 'temperaturecontrolled', 'usesautomation'].includes(propName)) {
                     account[propName] = ['true', 'yes', '1'].includes(value.toLowerCase());
-                } else if (propName === 'numberOfShifts') {
+                } else if (propName === 'numberofshifts') {
                     account[propName] = parseInt(value, 10) || 0;
                 } else {
                     account[propName] = value;
                 }
             });
-            if (account.accountName) accountsToImport.push(account);
+            if (account.accountname) accountsToImport.push(account);
         });
 
         if (accountsToImport.length > 0) {
@@ -627,14 +612,14 @@ async function parseReportCsv(csvText) {
                     report[propName] = value;
                 }
             });
-            if (report.name && !isNaN(report.accountId)) reportsToImport.push(report);
+            if (report.name && !isNaN(report.accountid)) reportsToImport.push(report);
         });
 
         if (reportsToImport.length > 0) {
             let importCount = 0, errorCount = 0;
             const promises = reportsToImport.map(reportData => new Promise(resolve => {
                 const store = getObjectStore(STORE_NAME_ACCOUNTS, 'readwrite');
-                const request = store.get(reportData.accountId);
+                const request = store.get(reportData.accountid);
                 request.onsuccess = function() {
                     const account = request.result;
                     if (account) {
@@ -644,8 +629,8 @@ async function parseReportCsv(csvText) {
                             const updateRequest = store.put(account);
                             updateRequest.onsuccess = () => { importCount++; resolve(); };
                             updateRequest.onerror = () => { errorCount++; resolve(); };
-                        } else { errorCount++; resolve(); }
-                    } else { errorCount++; resolve(); }
+                        } else { errorCount++; resolve(); } // Duplicate
+                    } else { errorCount++; resolve(); } // No account
                 };
                 request.onerror = () => { errorCount++; resolve(); };
             }));
