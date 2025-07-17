@@ -103,7 +103,7 @@ function initDb() {
         db = event.target.result;
         if (!db.objectStoreNames.contains(STORE_NAME_ACCOUNTS)) {
             const accountStore = db.createObjectStore(STORE_NAME_ACCOUNTS, { keyPath: 'id', autoIncrement: true });
-            accountStore.createIndex('name', 'accountName', { unique: false });
+            accountStore.createIndex('accountName', 'accountName', { unique: false });
             accountStore.createIndex('region', 'region', { unique: false });
             accountStore.createIndex('wms', 'wms', { unique: false });
             accountStore.createIndex('accountType', 'accountType', { unique: false });
@@ -114,7 +114,6 @@ function initDb() {
             accountStore.createIndex('internationalShipping', 'internationalShipping', { unique: false });
             accountStore.createIndex('processesReturns', 'processesReturns', { unique: false });
             accountStore.createIndex('temperatureControlled', 'temperatureControlled', { unique: false });
-            // ** BUG FIX HERE **
             accountStore.createIndex('usesAutomation', 'usesAutomation', { unique: false });
         }
     };
@@ -367,9 +366,9 @@ function setupEventListeners() {
         });
     });
     document.getElementById('addNewReportBtn').addEventListener('click', addNewReport);
-    // ** NEW: Listen for clicks on buttons, not changes on inputs **
-    document.getElementById('submitAccountCsvBtn').addEventListener('click', handleAccountCsvUpload);
-    document.getElementById('submitReportCsvBtn').addEventListener('click', handleReportCsvUpload);
+    // Changed to listen directly on the file input's 'change' event
+    document.getElementById('accountCsvUpload').addEventListener('change', handleAccountCsvUpload);
+    document.getElementById('reportCsvUpload').addEventListener('change', handleReportCsvUpload);
 }
 
 function toggleSection(contentId) {
@@ -391,10 +390,9 @@ function showMessage(message, type = 'info') {
         error: ['bg-red-100', 'text-red-800'],
         info: ['bg-blue-100', 'text-blue-800']
     };
-    displayArea.classList.add(...(typeClasses[type] || typeClasses['info']));
-    if (type !== 'info') {
-        setTimeout(() => displayArea.classList.add('hidden'), 5000);
-    }
+    displayArea.classList.add(...(typeClasses[type] || typeClasses.info));
+    // All message types now hide after 5 seconds for consistency
+    setTimeout(() => displayArea.classList.add('hidden'), 5000);
 }
 
 function addAccountManually() {
@@ -458,27 +456,28 @@ function addNewReport() {
                 ['newReportName', 'newReportPath', 'newReportType', 'newReportTags', 'selectAccountForReport'].forEach(id => document.getElementById(id).value = '');
                 loadAllAccounts();
             };
-            updateRequest.onerror = (e) => showMessage('Error adding report.', 'error');
+            updateRequest.onerror = () => showMessage('Error adding report.', 'error');
         } else {
             showMessage('Account not found.', 'error');
         }
     };
-    request.onerror = (e) => showMessage('Error fetching account.', 'error');
+    request.onerror = () => showMessage('Error fetching account.', 'error');
 }
 
-// ** NEW: Robust CSV Parsing Logic **
+// Robust CSV parser to handle commas and newlines within quoted fields
 function robustCsvParser(csvText) {
     const rows = [];
     let currentRow = [];
     let currentField = '';
     let inQuotedField = false;
-    csvText = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+    csvText = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n'); // Normalize newlines
+
     for (let i = 0; i < csvText.length; i++) {
         const char = csvText[i];
         if (inQuotedField) {
             if (char === '"' && (i + 1 < csvText.length && csvText[i + 1] === '"')) {
                 currentField += '"';
-                i++;
+                i++; // Skip the next quote
             } else if (char === '"') {
                 inQuotedField = false;
             } else {
@@ -500,13 +499,17 @@ function robustCsvParser(csvText) {
             }
         }
     }
+    // Add the last row if it's not empty
     if (currentField || currentRow.length > 0) {
         currentRow.push(currentField);
         rows.push(currentRow);
     }
+    // Filter out completely empty rows (e.g., from trailing newlines)
     return rows.filter(row => row.length > 1 || (row.length === 1 && row[0] !== ''));
 }
 
+
+// Helper to process the file selected from an input
 function processCsvFile(file, parserFunc) {
     if (!file) {
         showMessage('Please select a file first.', 'error');
@@ -519,14 +522,37 @@ function processCsvFile(file, parserFunc) {
     reader.readAsText(file);
 }
 
+// Event handler for account CSV file input change
 function handleAccountCsvUpload() {
     const file = document.getElementById('accountCsvUpload').files[0];
     processCsvFile(file, parseAccountCsv);
 }
 
+// Event handler for report CSV file input change
 function handleReportCsvUpload() {
     const file = document.getElementById('reportCsvUpload').files[0];
     processCsvFile(file, parseReportCsv);
+}
+
+// Helper function to normalize CSV headers to camelCase properties
+function headerToCamelCase(header) {
+    // Handle specific headers that don't follow simple camelCase conversion
+    const specialCases = {
+        'what wms does this account use?': 'wms',
+        'customer solution type?': 'customerSolutionType',
+        'customer slas text': 'customerSLAsText',
+        'number of shifts': 'numberOfShifts',
+        'picking methods': 'pickingMethods',
+        'transportation config': 'transportationConfig',
+        'account name': 'accountName',
+        'account type': 'accountType'
+    };
+    const lowerCaseHeader = header.toLowerCase().trim();
+    if (specialCases[lowerCaseHeader]) {
+        return specialCases[lowerCaseHeader];
+    }
+    // General case: convert "Any Header With Spaces" to "anyHeaderWithSpaces"
+    return lowerCaseHeader.replace(/\s(.)/g, (match, group1) => group1.toUpperCase()).replace(/\s/g, '');
 }
 
 async function parseAccountCsv(csvText) {
@@ -539,27 +565,37 @@ async function parseAccountCsv(csvText) {
         const headers = parsedData[0].map(h => h.trim());
         const dataRows = parsedData.slice(1);
         const accountsToImport = [];
+
         dataRows.forEach(values => {
+            // Skip completely empty rows
             if (values.every(v => v.trim() === '')) return;
+            // Basic validation for column count
             if (values.length !== headers.length) {
-                console.warn('Skipping row with mismatched column count:', values);
+                console.warn('Skipping row due to mismatched column count:', values);
                 return;
             }
+
             const account = { associatedReports: [] };
             headers.forEach((header, index) => {
+                const propName = headerToCamelCase(header);
                 let value = values[index] ? values[index].trim() : '';
-                let propName = header.toLowerCase().replace(/\s+/g, '').replace('whatwmsdoesthisaccountuse?', 'wms').replace('customersolutiontype?', 'customersolutiontype');
-                if (propName.includes('solutiontype') || propName.includes('pickingmethods') || propName.includes('transportationconfig')) {
-                    account[propName] = value ? value.split(',').map(s => s.trim()).filter(Boolean) : [];
-                } else if (['foodgrade', 'hazardousmaterials', 'internationalshipping', 'processesreturns', 'temperaturecontrolled', 'usesautomation'].includes(propName)) {
+
+                // Special parsing for specific fields
+                if (['customerSolutionType', 'pickingMethods', 'transportationConfig'].includes(propName)) {
+                    // Split by comma or semicolon, then filter out empty strings
+                    account[propName] = value ? value.split(/[,;]+/).map(s => s.trim()).filter(Boolean) : [];
+                } else if (['foodGrade', 'hazardousMaterials', 'internationalShipping', 'processesReturns', 'temperatureControlled', 'usesAutomation'].includes(propName)) {
+                    // Convert string to boolean
                     account[propName] = ['true', 'yes', '1'].includes(value.toLowerCase());
-                } else if (propName === 'numberofshifts') {
+                } else if (propName === 'numberOfShifts') {
+                    // Convert to integer
                     account[propName] = parseInt(value, 10) || 0;
                 } else {
                     account[propName] = value;
                 }
             });
-            if (account.accountname) accountsToImport.push(account);
+            // Only add if account name is not empty
+            if (account.accountName) accountsToImport.push(account);
         });
 
         if (accountsToImport.length > 0) {
@@ -567,10 +603,12 @@ async function parseAccountCsv(csvText) {
             let importCount = 0, errorCount = 0;
             const promises = accountsToImport.map(accountData => new Promise(resolve => {
                 const suggestedReports = suggestReportsForAccount(accountData);
+                // Directly assign suggested reports for CSV import
                 accountData.associatedReports = suggestedReports.map(sr => { delete sr.suggested; delete sr.uniqueId; return sr; });
+
                 const request = store.add(accountData);
                 request.onsuccess = () => { importCount++; resolve(); };
-                request.onerror = (e) => { console.error('DB Error:', e.target.error); errorCount++; resolve(); };
+                request.onerror = (e) => { console.error('DB Error adding account:', e.target.error); errorCount++; resolve(); };
             }));
             await Promise.all(promises);
             showMessage(`Finished! Imported ${importCount} accounts, with ${errorCount} errors.`, errorCount > 0 ? 'error' : 'success');
@@ -580,10 +618,10 @@ async function parseAccountCsv(csvText) {
             showMessage('No valid accounts found in file.', 'error');
         }
     } catch (error) {
-        showMessage("Critical error during CSV parsing.", "error");
+        showMessage("Critical error during CSV parsing. Check file format.", "error");
         console.error("CSV Parsing Error:", error);
     } finally {
-        document.getElementById('accountCsvUpload').value = '';
+        document.getElementById('accountCsvUpload').value = ''; // Clear the file input for next upload
     }
 }
 
@@ -597,13 +635,19 @@ async function parseReportCsv(csvText) {
         const headers = parsedData[0].map(h => h.trim());
         const dataRows = parsedData.slice(1);
         const reportsToImport = [];
+
         dataRows.forEach(values => {
-            if (values.every(v => v.trim() === '')) return;
-            if (values.length !== headers.length) return;
-            const report = { parameters: {} };
+            if (values.every(v => v.trim() === '')) return; // Skip empty rows
+            if (values.length !== headers.length) {
+                console.warn('Skipping report row due to mismatched column count:', values);
+                return; // Skip rows with incorrect column count
+            }
+
+            const report = { parameters: {} }; // Initialize parameters
             headers.forEach((header, index) => {
                 let value = values[index] ? values[index].trim() : '';
-                let propName = header.toLowerCase().replace(/\s+/g, '');
+                let propName = header.toLowerCase().replace(/\s+/g, ''); // Convert header to simple camelCase
+
                 if (propName === 'tags') {
                     report[propName] = value ? value.split(',').map(s => s.trim()).filter(Boolean) : [];
                 } else if (propName === 'accountid') {
@@ -612,27 +656,40 @@ async function parseReportCsv(csvText) {
                     report[propName] = value;
                 }
             });
-            if (report.name && !isNaN(report.accountid)) reportsToImport.push(report);
+            // Only add if report name is not empty and accountId is a valid number
+            if (report.name && !isNaN(report.accountid)) {
+                 report.fitScore = Math.floor(Math.random() * 5) + 1; // Assign random fit score
+                 reportsToImport.push(report);
+            } else {
+                 console.warn("Skipping invalid report row (missing name or invalid accountId):", values);
+            }
         });
 
         if (reportsToImport.length > 0) {
             let importCount = 0, errorCount = 0;
             const promises = reportsToImport.map(reportData => new Promise(resolve => {
                 const store = getObjectStore(STORE_NAME_ACCOUNTS, 'readwrite');
-                const request = store.get(reportData.accountid);
+                const request = store.get(reportData.accountid); // Use reportData.accountid for consistency
                 request.onsuccess = function() {
                     const account = request.result;
                     if (account) {
                         if (!account.associatedReports) account.associatedReports = [];
+                        // Check for duplicates (same name and type)
                         if (!account.associatedReports.some(r => r.name === reportData.name && r.type === reportData.type)) {
                             account.associatedReports.push(reportData);
                             const updateRequest = store.put(account);
                             updateRequest.onsuccess = () => { importCount++; resolve(); };
-                            updateRequest.onerror = () => { errorCount++; resolve(); };
-                        } else { errorCount++; resolve(); } // Duplicate
-                    } else { errorCount++; resolve(); } // No account
+                            updateRequest.onerror = (e) => { console.error(`DB Error updating account ${reportData.accountid} with report ${reportData.name}:`, e.target.error); errorCount++; resolve(); };
+                        } else {
+                            console.warn(`Skipping duplicate report "${reportData.name}" for account ID ${reportData.accountid}.`);
+                            errorCount++; resolve(); // Count as error/skipped due to duplicate
+                        }
+                    } else {
+                        console.warn(`Account with ID ${reportData.accountid} not found for report "${reportData.name}".`);
+                        errorCount++; resolve(); // Account not found
+                    }
                 };
-                request.onerror = () => { errorCount++; resolve(); };
+                request.onerror = (e) => { console.error(`DB Error fetching account ${reportData.accountid} for report import:`, e.target.error); errorCount++; resolve(); };
             }));
             await Promise.all(promises);
             showMessage(`Finished! Imported ${importCount} reports, with ${errorCount} errors.`, errorCount > 0 ? 'error' : 'success');
@@ -641,7 +698,7 @@ async function parseReportCsv(csvText) {
             showMessage('No valid reports found in file.', 'error');
         }
     } catch (error) {
-        showMessage("Critical error during report CSV parsing.", "error");
+        showMessage("Critical error during report CSV parsing. Check file format.", "error");
         console.error("Report CSV Parsing Error:", error);
     } finally {
         document.getElementById('reportCsvUpload').value = '';
@@ -864,14 +921,18 @@ function updateView() {
     reportsBtn.classList.toggle('btn-primary', currentView === 'reports');
     reportsBtn.classList.toggle('btn-secondary', currentView !== 'reports');
 
+    // Hide/show relevant filter and sort containers based on view
     document.getElementById('accountFiltersContainer').style.display = currentView === 'accounts' ? 'contents' : 'none';
     document.getElementById('groupByContainer').style.display = currentView === 'accounts' ? 'block' : 'none';
     document.getElementById('reportSortContainer').style.display = currentView === 'reports' ? 'block' : 'none';
+    // The specific report filters also need to be toggled
     [
-        document.getElementById('filterReportMinFitScore').parentElement,
-        document.getElementById('filterReportTagSearch').parentElement,
-        document.getElementById('filterReportType').parentElement
-    ].forEach(el => el.style.display = currentView === 'reports' ? 'block' : 'none');
+        document.getElementById('filterReportMinFitScore').closest('div'), // Using closest('div') to get the parent div containing label and input
+        document.getElementById('filterReportTagSearch').closest('div'),
+        document.getElementById('filterReportType').closest('div')
+    ].forEach(el => {
+        if (el) el.style.display = currentView === 'reports' ? 'block' : 'none';
+    });
     
     applyFilters();
 }
@@ -910,8 +971,8 @@ function exportAccountsToCsv() {
 function csvEscape(value) {
     if (value === null || value === undefined) return '';
     const str = String(value);
-    if (/[",\n]/.test(str)) {
-        return '"' + str.replace(/"/g, '""') + '"';
+    if (/[",\n]/.test(str)) { // Check if value contains comma, quote, or newline
+        return '"' + str.replace(/"/g, '""') + '"'; // Enclose in quotes and escape internal quotes
     }
     return str;
 }
