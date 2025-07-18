@@ -116,6 +116,10 @@ function initDb() {
             accountStore.createIndex('temperatureControlled', 'temperatureControlled', { unique: false });
             accountStore.createIndex('usesAutomation', 'usesAutomation', { unique: false });
         }
+        // When a new database is created or an old one is upgraded, import initial data
+        event.target.transaction.oncomplete = () => {
+            importInitialData();
+        };
     };
 
     request.onsuccess = function(event) {
@@ -130,6 +134,54 @@ function initDb() {
         showMessage('Error opening database. Some features may not work.', 'error');
     };
 }
+
+async function importInitialData() {
+    try {
+        const response = await fetch('initialData.json');
+        if (!response.ok) {
+            throw new Error(`HTTP error! status: ${response.status}`);
+        }
+        const initialAccounts = await response.json();
+        const store = getObjectStore(STORE_NAME_ACCOUNTS, 'readwrite');
+        let importCount = 0;
+        for (const accountData of initialAccounts) {
+            // Check if account with the same name already exists to prevent duplicates on subsequent loads
+            const existingAccountRequest = store.index('accountName').get(accountData.accountName);
+            await new Promise((resolve, reject) => {
+                existingAccountRequest.onsuccess = (e) => {
+                    if (!e.target.result) { // If account does not exist, add it
+                        const addRequest = store.add(accountData);
+                        addRequest.onsuccess = () => {
+                            importCount++;
+                            resolve();
+                        };
+                        addRequest.onerror = (err) => {
+                            console.error('Error adding initial account:', err.target.error);
+                            resolve(); // Resolve even on error to continue with other accounts
+                        };
+                    } else {
+                        console.log(`Account "${accountData.accountName}" already exists, skipping initial import.`);
+                        resolve();
+                    }
+                };
+                existingAccountRequest.onerror = (err) => {
+                    console.error('Error checking for existing account:', err.target.error);
+                    resolve(); // Resolve even on error
+                };
+            });
+        }
+        if (importCount > 0) {
+            showMessage(`Imported ${importCount} accounts from initialData.json.`, 'success');
+        } else {
+            showMessage('No new accounts imported from initialData.json (they might already exist).', 'info');
+        }
+        loadAllAccounts(); // Reload all accounts after import
+    } catch (error) {
+        console.error('Failed to load or import initial data:', error);
+        showMessage('Failed to load initial data from JSON file.', 'error');
+    }
+}
+
 
 function getObjectStore(storeName, mode) {
     const transaction = db.transaction([storeName], mode);
@@ -311,8 +363,20 @@ function addSuggestedReportListeners() {
     });
     document.getElementById('finalizeAccountBtn').onclick = () => {
         if (!currentEditedAccount) return;
+
+        // Ensure associatedReports is initialized
         currentEditedAccount.associatedReports = currentEditedAccount.associatedReports || [];
-        const request = getObjectStore(STORE_NAME_ACCOUNTS, 'readwrite').add(currentEditedAccount);
+
+        // If currentEditedAccount has an ID (i.e., it's an existing account being edited),
+        // use put() to update it. Otherwise, use add() for a new account.
+        const store = getObjectStore(STORE_NAME_ACCOUNTS, 'readwrite');
+        let request;
+        if (currentEditedAccount.id) {
+            request = store.put(currentEditedAccount); // Update existing account
+        } else {
+            request = store.add(currentEditedAccount); // Add new account
+        }
+
         request.onsuccess = () => {
             showMessage('Account and reports saved!', 'success');
             resetUIForNewAccount();
@@ -366,9 +430,8 @@ function setupEventListeners() {
         });
     });
     document.getElementById('addNewReportBtn').addEventListener('click', addNewReport);
-    // Changed to listen directly on the file input's 'change' event
-    document.getElementById('accountCsvUpload').addEventListener('change', handleAccountCsvUpload);
-    document.getElementById('reportCsvUpload').addEventListener('change', handleReportCsvUpload);
+    document.getElementById('submitAccountCsvBtn').addEventListener('click', handleAccountCsvUpload);
+    document.getElementById('submitReportCsvBtn').addEventListener('click', handleReportCsvUpload);
 }
 
 function toggleSection(contentId) {
@@ -391,8 +454,9 @@ function showMessage(message, type = 'info') {
         info: ['bg-blue-100', 'text-blue-800']
     };
     displayArea.classList.add(...(typeClasses[type] || typeClasses.info));
-    // All message types now hide after 5 seconds for consistency
-    setTimeout(() => displayArea.classList.add('hidden'), 5000);
+    if (type !== 'info') {
+        setTimeout(() => displayArea.classList.add('hidden'), 5000);
+    }
 }
 
 function addAccountManually() {
@@ -464,20 +528,18 @@ function addNewReport() {
     request.onerror = () => showMessage('Error fetching account.', 'error');
 }
 
-// Robust CSV parser to handle commas and newlines within quoted fields
 function robustCsvParser(csvText) {
     const rows = [];
     let currentRow = [];
     let currentField = '';
     let inQuotedField = false;
-    csvText = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n'); // Normalize newlines
-
+    csvText = csvText.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
     for (let i = 0; i < csvText.length; i++) {
         const char = csvText[i];
         if (inQuotedField) {
             if (char === '"' && (i + 1 < csvText.length && csvText[i + 1] === '"')) {
                 currentField += '"';
-                i++; // Skip the next quote
+                i++;
             } else if (char === '"') {
                 inQuotedField = false;
             } else {
@@ -499,17 +561,13 @@ function robustCsvParser(csvText) {
             }
         }
     }
-    // Add the last row if it's not empty
     if (currentField || currentRow.length > 0) {
         currentRow.push(currentField);
         rows.push(currentRow);
     }
-    // Filter out completely empty rows (e.g., from trailing newlines)
     return rows.filter(row => row.length > 1 || (row.length === 1 && row[0] !== ''));
 }
 
-
-// Helper to process the file selected from an input
 function processCsvFile(file, parserFunc) {
     if (!file) {
         showMessage('Please select a file first.', 'error');
@@ -522,37 +580,41 @@ function processCsvFile(file, parserFunc) {
     reader.readAsText(file);
 }
 
-// Event handler for account CSV file input change
 function handleAccountCsvUpload() {
     const file = document.getElementById('accountCsvUpload').files[0];
     processCsvFile(file, parseAccountCsv);
 }
 
-// Event handler for report CSV file input change
 function handleReportCsvUpload() {
     const file = document.getElementById('reportCsvUpload').files[0];
     processCsvFile(file, parseReportCsv);
 }
 
-// Helper function to normalize CSV headers to camelCase properties
+// ** FINAL FIX: Correctly maps CSV headers to camelCase properties **
 function headerToCamelCase(header) {
-    // Handle specific headers that don't follow simple camelCase conversion
+    // Handle special cases first
     const specialCases = {
         'what wms does this account use?': 'wms',
         'customer solution type?': 'customerSolutionType',
         'customer slas text': 'customerSLAsText',
-        'number of shifts': 'numberOfShifts',
-        'picking methods': 'pickingMethods',
-        'transportation config': 'transportationConfig',
+        'number of shifts': 'numberOfShifts', // Add this for consistency
+        'picking methods': 'pickingMethods', // Add this
+        'transportation config': 'transportationConfig', // Add this
+        'food grade': 'foodGrade',
+        'hazardous materials': 'hazardousMaterials',
+        'international shipping': 'internationalShipping',
+        'processes returns': 'processesReturns',
+        'temperature controlled': 'temperatureControlled',
+        'uses automation': 'usesAutomation',
         'account name': 'accountName',
         'account type': 'accountType'
     };
-    const lowerCaseHeader = header.toLowerCase().trim();
+    const lowerCaseHeader = header.toLowerCase();
     if (specialCases[lowerCaseHeader]) {
         return specialCases[lowerCaseHeader];
     }
-    // General case: convert "Any Header With Spaces" to "anyHeaderWithSpaces"
-    return lowerCaseHeader.replace(/\s(.)/g, (match, group1) => group1.toUpperCase()).replace(/\s/g, '');
+    // General case: convert "Title Case" to "camelCase"
+    return lowerCaseHeader.replace(/\s(.)/g, (match, group1) => group1.toUpperCase());
 }
 
 async function parseAccountCsv(csvText) {
@@ -567,61 +629,74 @@ async function parseAccountCsv(csvText) {
         const accountsToImport = [];
 
         dataRows.forEach(values => {
-            // Skip completely empty rows
             if (values.every(v => v.trim() === '')) return;
-            // Basic validation for column count
             if (values.length !== headers.length) {
-                console.warn('Skipping row due to mismatched column count:', values);
+                console.warn('Skipping row with mismatched column count:', values);
                 return;
             }
-
             const account = { associatedReports: [] };
             headers.forEach((header, index) => {
                 const propName = headerToCamelCase(header);
                 let value = values[index] ? values[index].trim() : '';
-
-                // Special parsing for specific fields
+                
                 if (['customerSolutionType', 'pickingMethods', 'transportationConfig'].includes(propName)) {
-                    // Split by comma or semicolon, then filter out empty strings
-                    account[propName] = value ? value.split(/[,;]+/).map(s => s.trim()).filter(Boolean) : [];
+                    account[propName] = value ? value.split(/[\n,;]+/).map(s => s.trim()).filter(Boolean) : []; // Added ; as a separator
                 } else if (['foodGrade', 'hazardousMaterials', 'internationalShipping', 'processesReturns', 'temperatureControlled', 'usesAutomation'].includes(propName)) {
-                    // Convert string to boolean
                     account[propName] = ['true', 'yes', '1'].includes(value.toLowerCase());
                 } else if (propName === 'numberOfShifts') {
-                    // Convert to integer
                     account[propName] = parseInt(value, 10) || 0;
                 } else {
                     account[propName] = value;
                 }
             });
-            // Only add if account name is not empty
+            // Auto-generate ID if not present in CSV (for new accounts)
+            if (!account.id) {
+                account.id = Date.now() + Math.floor(Math.random() * 1000); // Simple unique ID
+            }
             if (account.accountName) accountsToImport.push(account);
         });
 
         if (accountsToImport.length > 0) {
             const store = getObjectStore(STORE_NAME_ACCOUNTS, 'readwrite');
-            let importCount = 0, errorCount = 0;
+            let importCount = 0, updateCount = 0, errorCount = 0;
             const promises = accountsToImport.map(accountData => new Promise(resolve => {
-                const suggestedReports = suggestReportsForAccount(accountData);
-                // Directly assign suggested reports for CSV import
-                accountData.associatedReports = suggestedReports.map(sr => { delete sr.suggested; delete sr.uniqueId; return sr; });
-
-                const request = store.add(accountData);
-                request.onsuccess = () => { importCount++; resolve(); };
-                request.onerror = (e) => { console.error('DB Error adding account:', e.target.error); errorCount++; resolve(); };
+                // Check if account already exists by accountName to update or add
+                const existingAccountRequest = store.index('accountName').get(accountData.accountName);
+                existingAccountRequest.onsuccess = (e) => {
+                    const existingAccount = e.target.result;
+                    if (existingAccount) {
+                        // Update existing account
+                        const updatedAccount = { ...existingAccount, ...accountData };
+                        const updateRequest = store.put(updatedAccount);
+                        updateRequest.onsuccess = () => { updateCount++; resolve(); };
+                        updateRequest.onerror = (err) => { console.error('DB Update Error:', err.target.error); errorCount++; resolve(); };
+                    } else {
+                        // Add new account and suggest reports
+                        const suggestedReports = suggestReportsForAccount(accountData);
+                        accountData.associatedReports = suggestedReports.map(sr => { delete sr.suggested; delete sr.uniqueId; return sr; });
+                        const addRequest = store.add(accountData);
+                        addRequest.onsuccess = () => { importCount++; resolve(); };
+                        addRequest.onerror = (err) => { console.error('DB Add Error:', err.target.error); errorCount++; resolve(); };
+                    }
+                };
+                existingAccountRequest.onerror = (err) => {
+                    console.error('Error checking for existing account during CSV import:', err.target.error);
+                    errorCount++;
+                    resolve();
+                };
             }));
             await Promise.all(promises);
-            showMessage(`Finished! Imported ${importCount} accounts, with ${errorCount} errors.`, errorCount > 0 ? 'error' : 'success');
+            showMessage(`Finished! Imported ${importCount} new accounts, updated ${updateCount} accounts, with ${errorCount} errors.`, errorCount > 0 ? 'error' : 'success');
             loadAllAccounts();
             populateFilterOptions();
         } else {
             showMessage('No valid accounts found in file.', 'error');
         }
     } catch (error) {
-        showMessage("Critical error during CSV parsing. Check file format.", "error");
+        showMessage("Critical error during CSV parsing.", "error");
         console.error("CSV Parsing Error:", error);
     } finally {
-        document.getElementById('accountCsvUpload').value = ''; // Clear the file input for next upload
+        document.getElementById('accountCsvUpload').value = '';
     }
 }
 
@@ -635,19 +710,13 @@ async function parseReportCsv(csvText) {
         const headers = parsedData[0].map(h => h.trim());
         const dataRows = parsedData.slice(1);
         const reportsToImport = [];
-
         dataRows.forEach(values => {
-            if (values.every(v => v.trim() === '')) return; // Skip empty rows
-            if (values.length !== headers.length) {
-                console.warn('Skipping report row due to mismatched column count:', values);
-                return; // Skip rows with incorrect column count
-            }
-
-            const report = { parameters: {} }; // Initialize parameters
+            if (values.every(v => v.trim() === '')) return;
+            if (values.length !== headers.length) return;
+            const report = { parameters: {} };
             headers.forEach((header, index) => {
                 let value = values[index] ? values[index].trim() : '';
-                let propName = header.toLowerCase().replace(/\s+/g, ''); // Convert header to simple camelCase
-
+                let propName = header.toLowerCase().replace(/\s+/g, '');
                 if (propName === 'tags') {
                     report[propName] = value ? value.split(',').map(s => s.trim()).filter(Boolean) : [];
                 } else if (propName === 'accountid') {
@@ -656,40 +725,27 @@ async function parseReportCsv(csvText) {
                     report[propName] = value;
                 }
             });
-            // Only add if report name is not empty and accountId is a valid number
-            if (report.name && !isNaN(report.accountid)) {
-                 report.fitScore = Math.floor(Math.random() * 5) + 1; // Assign random fit score
-                 reportsToImport.push(report);
-            } else {
-                 console.warn("Skipping invalid report row (missing name or invalid accountId):", values);
-            }
+            if (report.name && !isNaN(report.accountId)) reportsToImport.push(report);
         });
 
         if (reportsToImport.length > 0) {
             let importCount = 0, errorCount = 0;
             const promises = reportsToImport.map(reportData => new Promise(resolve => {
                 const store = getObjectStore(STORE_NAME_ACCOUNTS, 'readwrite');
-                const request = store.get(reportData.accountid); // Use reportData.accountid for consistency
+                const request = store.get(reportData.accountId);
                 request.onsuccess = function() {
                     const account = request.result;
                     if (account) {
                         if (!account.associatedReports) account.associatedReports = [];
-                        // Check for duplicates (same name and type)
                         if (!account.associatedReports.some(r => r.name === reportData.name && r.type === reportData.type)) {
                             account.associatedReports.push(reportData);
                             const updateRequest = store.put(account);
                             updateRequest.onsuccess = () => { importCount++; resolve(); };
-                            updateRequest.onerror = (e) => { console.error(`DB Error updating account ${reportData.accountid} with report ${reportData.name}:`, e.target.error); errorCount++; resolve(); };
-                        } else {
-                            console.warn(`Skipping duplicate report "${reportData.name}" for account ID ${reportData.accountid}.`);
-                            errorCount++; resolve(); // Count as error/skipped due to duplicate
-                        }
-                    } else {
-                        console.warn(`Account with ID ${reportData.accountid} not found for report "${reportData.name}".`);
-                        errorCount++; resolve(); // Account not found
-                    }
+                            updateRequest.onerror = () => { errorCount++; resolve(); };
+                        } else { errorCount++; resolve(); }
+                    } else { errorCount++; resolve(); }
                 };
-                request.onerror = (e) => { console.error(`DB Error fetching account ${reportData.accountid} for report import:`, e.target.error); errorCount++; resolve(); };
+                request.onerror = () => { errorCount++; resolve(); };
             }));
             await Promise.all(promises);
             showMessage(`Finished! Imported ${importCount} reports, with ${errorCount} errors.`, errorCount > 0 ? 'error' : 'success');
@@ -698,7 +754,7 @@ async function parseReportCsv(csvText) {
             showMessage('No valid reports found in file.', 'error');
         }
     } catch (error) {
-        showMessage("Critical error during report CSV parsing. Check file format.", "error");
+        showMessage("Critical error during report CSV parsing.", "error");
         console.error("Report CSV Parsing Error:", error);
     } finally {
         document.getElementById('reportCsvUpload').value = '';
@@ -764,13 +820,16 @@ function applyFilters() {
             type: document.getElementById('filterReportType').value,
             tags: document.getElementById('filterReportTagSearch').value.toLowerCase().split(',').map(s => s.trim()).filter(Boolean)
         };
+        // NOTE: Fit score is not calculated or stored in this version.
+        // The filtering by minScore will currently not yield results unless you implement fitScore calculation.
         if (reportFilters.minScore) allReports = allReports.filter(r => r.fitScore >= reportFilters.minScore);
         if (reportFilters.type) allReports = allReports.filter(r => r.type === reportFilters.type);
         if (reportFilters.tags.length > 0) allReports = allReports.filter(r => r.tags && reportFilters.tags.every(t => r.tags.map(tag => tag.toLowerCase()).includes(t)));
 
         const sortOrder = document.getElementById('reportSortOrder').value;
-        if (sortOrder === 'desc') allReports.sort((a, b) => (b.fitScore || 0) - (a.fitScore || 0));
-        if (sortOrder === 'asc') allReports.sort((a, b) => (a.fitScore || 0) - (b.fitScore || 0));
+        // Sort reports by name for consistency if no fitScore exists
+        if (sortOrder === 'desc') allReports.sort((a, b) => (b.name || '').localeCompare(a.name || ''));
+        if (sortOrder === 'asc') allReports.sort((a, b) => (a.name || '').localeCompare(b.name || ''));
         renderContent(allReports);
     }
 }
@@ -921,18 +980,14 @@ function updateView() {
     reportsBtn.classList.toggle('btn-primary', currentView === 'reports');
     reportsBtn.classList.toggle('btn-secondary', currentView !== 'reports');
 
-    // Hide/show relevant filter and sort containers based on view
     document.getElementById('accountFiltersContainer').style.display = currentView === 'accounts' ? 'contents' : 'none';
     document.getElementById('groupByContainer').style.display = currentView === 'accounts' ? 'block' : 'none';
     document.getElementById('reportSortContainer').style.display = currentView === 'reports' ? 'block' : 'none';
-    // The specific report filters also need to be toggled
     [
-        document.getElementById('filterReportMinFitScore').closest('div'), // Using closest('div') to get the parent div containing label and input
-        document.getElementById('filterReportTagSearch').closest('div'),
-        document.getElementById('filterReportType').closest('div')
-    ].forEach(el => {
-        if (el) el.style.display = currentView === 'reports' ? 'block' : 'none';
-    });
+        document.getElementById('filterReportMinFitScore').parentElement,
+        document.getElementById('filterReportTagSearch').parentElement,
+        document.getElementById('filterReportType').parentElement
+    ].forEach(el => el.style.display = currentView === 'reports' ? 'block' : 'none');
     
     applyFilters();
 }
@@ -971,8 +1026,8 @@ function exportAccountsToCsv() {
 function csvEscape(value) {
     if (value === null || value === undefined) return '';
     const str = String(value);
-    if (/[",\n]/.test(str)) { // Check if value contains comma, quote, or newline
-        return '"' + str.replace(/"/g, '""') + '"'; // Enclose in quotes and escape internal quotes
+    if (/[",\n]/.test(str)) {
+        return '"' + str.replace(/"/g, '""') + '"';
     }
     return str;
 }
