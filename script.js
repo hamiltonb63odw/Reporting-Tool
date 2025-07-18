@@ -421,6 +421,7 @@ function setupEventListeners() {
         document.getElementById(id).addEventListener('change', applyFilters);
     });
     document.getElementById('exportCsvBtn').addEventListener('click', exportAccountsToCsv);
+    document.getElementById('clearAllDataBtn').addEventListener('click', clearAllData); // New listener for clear data button
     document.querySelectorAll('[data-filter-name]').forEach(button => {
         button.addEventListener('click', (e) => {
             const filterName = e.target.dataset.filterName;
@@ -477,14 +478,14 @@ function addAccountManually() {
         processesReturns: document.getElementById('newProcessesReturns').checked,
         temperatureControlled: document.getElementById('newTemperatureControlled').checked,
         usesAutomation: document.getElementById('newUsesAutomation').checked,
-        associatedReports: []
+        associatedReports: [] // Reports are not directly added here, handled by suggestions
     };
     if (!newAccount.accountName || !newAccount.region || !newAccount.wms) {
         showMessage('Please fill in Account Name, Region, and WMS.', 'error');
         return;
     }
     const suggestedReports = suggestReportsForAccount(newAccount);
-    displaySuggestedReportsUI(suggestedReports, newAccount);
+    displaySuggestedReportsUI(suggestedAccountData, newAccount); // Pass newAccount to displaySuggestedReportsUI
     showMessage(`Reviewing new account "${newAccount.accountName}". Please check suggested reports.`, 'info');
 }
 
@@ -1030,4 +1031,27 @@ function csvEscape(value) {
         return '"' + str.replace(/"/g, '""') + '"';
     }
     return str;
+}
+
+// Function to clear all data
+function clearAllData() {
+    if (confirm('Are you sure you want to clear ALL data? This action cannot be undone.')) {
+        const request = indexedDB.deleteDatabase(DB_NAME);
+
+        request.onsuccess = function () {
+            showMessage('All data cleared successfully. Reloading page...', 'success');
+            setTimeout(() => {
+                window.location.reload();
+            }, 1000); // Reload after a short delay
+        };
+
+        request.onerror = function (event) {
+            console.error('Error clearing database:', event.target.errorCode);
+            showMessage('Error clearing data. Please try again.', 'error');
+        };
+
+        request.onblocked = function () {
+            showMessage('Database is busy. Please close any other open tabs with this application and try again.', 'error');
+        };
+    }
 }
